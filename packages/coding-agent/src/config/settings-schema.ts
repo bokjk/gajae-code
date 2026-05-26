@@ -2750,14 +2750,15 @@ export const SETTINGS_SCHEMA = {
 
 	"dev.autoqaPush.endpoint": {
 		type: "string",
-		// Bundled QA collector — runs `/work/pi-www/autoqa` behind qa.omp.sh.
+		// Bundled QA collector — runs `the configured gajae-code Auto QA collector` behind qa.gajae-code.local.
 		// Override via `PI_AUTO_QA_PUSH_URL` or `dev.autoqaPush.endpoint`
 		// in `config.yml` to point at a self-hosted instance.
-		default: "https://qa.omp.sh/v1/grievances" as const,
+		default: "https://qa.gajae-code.local/v1/grievances" as const,
 		ui: {
 			tab: "tools",
 			label: "Auto QA Push Endpoint",
-			description: "Full URL that receives the JSON payload (default ships to https://qa.omp.sh/v1/grievances)",
+			description:
+				"Full URL that receives the JSON payload (default ships to https://qa.gajae-code.local/v1/grievances)",
 		},
 	},
 
