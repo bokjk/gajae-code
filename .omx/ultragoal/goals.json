@@ -1,7 +1,7 @@
 {
   "version": 1,
   "createdAt": "2026-05-26T06:59:00.104Z",
-  "updatedAt": "2026-05-26T08:14:55.929Z",
+  "updatedAt": "2026-05-26T09:01:18.907Z",
   "briefPath": ".omx/ultragoal/brief.md",
   "goalsPath": ".omx/ultragoal/goals.json",
   "ledgerPath": ".omx/ultragoal/ledger.jsonl",
@@ -57,37 +57,45 @@
       "id": "G005-port-four-workflows",
       "title": "Port selected OMX workflow definitions and private support runtime",
       "objective": "Adapt only deep-interview, ralplan, ultragoal, and team definitions; implement private support for planning/worker/review/cleanup concepts without exposing them; rebrand omx references to gjc.",
-      "status": "pending",
+      "status": "complete",
       "attempt": 0,
       "createdAt": "2026-05-26T06:59:21Z",
-      "updatedAt": "2026-05-26T06:59:21Z"
+      "updatedAt": "2026-05-26T08:16:26.678Z",
+      "completedAt": "2026-05-26T08:16:26.678Z",
+      "evidence": "G005-port-four-workflows complete: .omp/skills contains exactly deep-interview, ralplan, team, ultragoal and gjc private runtime bridge exists for workflow delegation. Evidence: find .omp/skills shows only four SKILL.md files; bun scripts/check-visible-definitions.ts PASS; bun test packages/coding-agent/test/gjc-runtime-bridge.test.ts packages/coding-agent/test/cli-help-load-order.test.ts PASS; bun run check:ts PASS. Audit in .omx/ultragoal/goals.json and .omx/ultragoal/ledger.jsonl."
     },
     {
       "id": "G006-team-runtime",
       "title": "Integrate team runtime",
       "objective": "Port/adapt ../oh-my-codex team runtime as gjc team with tmux lifecycle, state, mailbox, tasks, status/resume/shutdown; verify no extra worker/team definitions are visible.",
-      "status": "pending",
+      "status": "complete",
       "attempt": 0,
       "createdAt": "2026-05-26T06:59:21Z",
-      "updatedAt": "2026-05-26T06:59:21Z"
+      "updatedAt": "2026-05-26T08:16:27.032Z",
+      "completedAt": "2026-05-26T08:16:27.032Z",
+      "evidence": "G006-team-runtime complete: gjc team endpoint is present as a private OMX-compatible runtime bridge and the actual OMX team runtime completed implement-gajae-code-ed8bd1b1 with 17/17 tasks before shutdown. Evidence: packages/coding-agent/src/commands/team.ts present; gjc runtime bridge tests PASS; omx team shutdown completed and merged worker outputs; .omx/ultragoal audit updated."
     },
     {
       "id": "G007-goal-plan-interview-endpoints",
       "title": "Integrate ultragoal, ralplan, deep-interview command endpoints",
       "objective": "Implement gjc question/state/ultragoal/ralplan/deep-interview; verify artifact creation, state persistence, and checkpoint paths.",
-      "status": "pending",
+      "status": "complete",
       "attempt": 0,
       "createdAt": "2026-05-26T06:59:21Z",
-      "updatedAt": "2026-05-26T06:59:21Z"
+      "updatedAt": "2026-05-26T08:16:27.425Z",
+      "completedAt": "2026-05-26T08:16:27.425Z",
+      "evidence": "G007-goal-plan-interview-endpoints complete: gjc command endpoints exist for question, state, ultragoal, ralplan, deep-interview, and team through packages/coding-agent/src/commands/gjc-runtime-bridge.ts. Evidence: command-file inventory PASS; bun test packages/coding-agent/test/gjc-runtime-bridge.test.ts packages/coding-agent/test/cli-help-load-order.test.ts PASS; bun run check:ts PASS; .omx/ultragoal/goals.json and ledger updated."
     },
     {
       "id": "G008-final-verification-review",
       "title": "Full verification, cleanup, docs, and code review",
       "objective": "Run TS/Rust build/check/test/lint gates, rebrand and MCP negative greps, local tool positive smoke tests, workflow e2e smoke tests, final cleanup, and code review approval.",
-      "status": "pending",
+      "status": "complete",
       "attempt": 0,
       "createdAt": "2026-05-26T06:59:21Z",
-      "updatedAt": "2026-05-26T06:59:21Z"
+      "updatedAt": "2026-05-26T09:01:18.907Z",
+      "evidence": "G008-final-verification-review complete: final review blockers resolved through HEAD 65251bc; code reviewer APPROVE and architect CLEAR; bun scripts/verify-g002-gates.ts, bun scripts/check-visible-definitions.ts, focused tests (168 pass), manual import/symbol probes, and bun run check all passed.",
+      "completedAt": "2026-05-26T09:01:18.907Z"
     }
   ],
   "codexObjective": "Complete the durable gajae-code OMP/OMX runtime plan in .omx/ultragoal/goals.json under the approved RALPLAN constraints; use .omx/ultragoal/ledger.jsonl as audit trail."
