@@ -91,6 +91,14 @@
 		"./runtime-mcp": null,
 		"./runtime-mcp/*": null,
 		"./commands/gjc-runtime-bridge": null,
+		"./capability/mcp": null,
+		"./config/mcp-schema": null,
+		"./discovery/mcp-json": null,
+		"./exa/mcp-client": null,
+		"./internal-urls/mcp-protocol": null,
+		"./modes/components/runtime-mcp-add-wizard": null,
+		"./modes/controllers/runtime-mcp-command-controller": null,
+		"./slash-commands/helpers/mcp": null,
 		"./*": {
 			"types": "./src/*.ts",
 			"import": "./src/*.ts"

@@ -6,7 +6,7 @@ import { loadCapability } from "@gajae-code/coding-agent/capability";
 import { clearCache as clearFsCache } from "@gajae-code/coding-agent/capability/fs";
 import { clearClaudePluginRootsCache } from "@gajae-code/coding-agent/discovery/helpers";
 import "@gajae-code/coding-agent/discovery/claude-plugins";
-import type { MCPServer } from "@gajae-code/coding-agent/capability/mcp";
+import type { MCPServer } from "../src/capability/mcp";
 
 describe("issue-851: claude-plugins loads flat .mcp.json shape", () => {
 	let tempDir: string;

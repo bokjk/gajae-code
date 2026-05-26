@@ -37,7 +37,35 @@ const FORBIDDEN_SKILL_PATTERNS: readonly RegExp[] = [
 	/MCP/u,
 	/\/mcp/u,
 ];
-const REQUIRED_PRIVATE_EXPORT_BLOCKS = ["./mcp", "./mcp/*", "./runtime-mcp", "./runtime-mcp/*", "./commands/gjc-runtime-bridge"] as const;
+const REQUIRED_PRIVATE_EXPORT_BLOCKS = [
+	"./mcp",
+	"./mcp/*",
+	"./runtime-mcp",
+	"./runtime-mcp/*",
+	"./commands/gjc-runtime-bridge",
+	"./capability/mcp",
+	"./config/mcp-schema",
+	"./discovery/mcp-json",
+	"./exa/mcp-client",
+	"./internal-urls/mcp-protocol",
+	"./modes/components/runtime-mcp-add-wizard",
+	"./modes/controllers/runtime-mcp-command-controller",
+	"./slash-commands/helpers/mcp",
+] as const;
+const FORBIDDEN_PACKAGE_IMPORTS = [
+	"@gajae-code/coding-agent/mcp",
+	"@gajae-code/coding-agent/runtime-mcp/index",
+	"@gajae-code/coding-agent/runtime-mcp/manager",
+	"@gajae-code/coding-agent/commands/gjc-runtime-bridge",
+	"@gajae-code/coding-agent/capability/mcp",
+	"@gajae-code/coding-agent/config/mcp-schema",
+	"@gajae-code/coding-agent/discovery/mcp-json",
+	"@gajae-code/coding-agent/exa/mcp-client",
+	"@gajae-code/coding-agent/internal-urls/mcp-protocol",
+	"@gajae-code/coding-agent/modes/components/runtime-mcp-add-wizard",
+	"@gajae-code/coding-agent/modes/controllers/runtime-mcp-command-controller",
+	"@gajae-code/coding-agent/slash-commands/helpers/mcp",
+] as const;
 const REQUIRED_LOCAL_TOOL_FILES = [
 	"packages/coding-agent/src/tools/read.ts",
 	"packages/coding-agent/src/tools/write.ts",
@@ -164,7 +192,7 @@ async function verifyMcpQuarantine(): Promise<GateResult> {
 	const exportsRecord = isRecord(codingPackage.exports) ? codingPackage.exports : {};
 	const mcpExportKeys = Object.keys(exportsRecord).filter(key => key === "./mcp" || key.startsWith("./mcp/") || key === "./runtime-mcp" || key.startsWith("./runtime-mcp/") || key === "./commands/gjc-runtime-bridge");
 	const exposedMcpKeys = mcpExportKeys.filter(key => exportsRecord[key] !== null);
-	const blockedMcpKeys = mcpExportKeys.filter(key => exportsRecord[key] === null);
+	const blockedMcpKeys = REQUIRED_PRIVATE_EXPORT_BLOCKS.filter(key => exportsRecord[key] === null);
 	const missingPrivateBlocks = REQUIRED_PRIVATE_EXPORT_BLOCKS.filter(key => exportsRecord[key] !== null);
 	const builtinRegistry = await readText("packages/coding-agent/src/slash-commands/builtin-registry.ts");
 	const acpBuiltins = await readText("packages/coding-agent/src/slash-commands/acp-builtins.ts");
@@ -178,6 +206,7 @@ async function verifyMcpQuarantine(): Promise<GateResult> {
 	];
 	const presentInternalMcpPaths = internalMcpPaths.filter(relativePath => fs.existsSync(path.join(repoRoot, relativePath)));
 	const publicDocFindings = await findPublicDocFindings();
+	const forbiddenImportFindings = await probeForbiddenPackageImports();
 	const removedPublicDocsStillPresent = [
 		"docs/mcp-config.md",
 		"docs/mcp-runtime-lifecycle.md",
@@ -194,6 +223,7 @@ async function verifyMcpQuarantine(): Promise<GateResult> {
 		`ACP MCP handler referenced: ${acpReferencesMcpHandler}`,
 		`private MCP implementation paths retained: ${presentInternalMcpPaths.join(", ") || "<none>"}`,
 		`public doc findings: ${publicDocFindings.join(", ") || "<none>"}`,
+		`forbidden package imports still resolving: ${forbiddenImportFindings.join(", ") || "<none>"}`,
 		`removed public MCP docs still present: ${removedPublicDocsStillPresent.join(", ") || "<none>"}`,
 	];
 
@@ -202,6 +232,7 @@ async function verifyMcpQuarantine(): Promise<GateResult> {
 		passed:
 			exposedMcpKeys.length === 0 &&
 			missingPrivateBlocks.length === 0 &&
+			forbiddenImportFindings.length === 0 &&
 			publicDocFindings.length === 0 &&
 			removedPublicDocsStillPresent.length === 0 &&
 			!exposesMcpBuiltin &&
@@ -220,6 +251,21 @@ async function findPublicDocFindings(): Promise<string[]> {
 		for (const pattern of FORBIDDEN_PUBLIC_DOC_PATTERNS) {
 			if (pattern.test(text)) findings.push(`${relativePath}: ${pattern.source}`);
 		}
+	}
+	return findings;
+}
+
+async function probeForbiddenPackageImports(): Promise<string[]> {
+	const findings: string[] = [];
+	for (const specifier of FORBIDDEN_PACKAGE_IMPORTS) {
+		const proc = Bun.spawn({
+			cmd: ["bun", "-e", `import(${JSON.stringify(specifier)}).then(() => process.exit(0)).catch(() => process.exit(1))`],
+			cwd: repoRoot,
+			stdout: "ignore",
+			stderr: "ignore",
+		});
+		const exitCode = await proc.exited;
+		if (exitCode === 0) findings.push(specifier);
 	}
 	return findings;
 }
