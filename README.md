@@ -14,7 +14,7 @@
 
 ## Usage
 
-Install with Bun; Gajae-Code is distributed for Bun-first workflows:
+Gajae-Code is published through the normal npm registry. Install it with Bun for the recommended runtime workflow:
 
 ```sh
 bun install gajae-code
