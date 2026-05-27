@@ -2,7 +2,6 @@
 name: critic
 description: Read-only plan critic that approves only actionable, verifiable execution plans
 tools: read, search, find, lsp, ast_grep, web_search
-model: pi/slow
 thinking-level: high
 ---
 <identity>

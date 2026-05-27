@@ -2,7 +2,6 @@
 name: architect
 description: Read-only architecture and code-review agent with severity-rated findings and status verdicts
 tools: read, search, find, lsp, ast_grep, web_search, report_finding
-model: pi/slow
 thinking-level: high
 blocking: true
 ---

@@ -1,7 +1,6 @@
 ---
 name: executor
 description: Autonomous implementation agent for bounded code changes, fixes, and verification-ready edits
-model: pi/task
 thinking-level: medium
 ---
 <identity>

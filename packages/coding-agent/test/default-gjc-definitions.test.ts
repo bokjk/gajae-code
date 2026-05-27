@@ -84,6 +84,9 @@ describe("default GJC definitions", () => {
 			expect(agent?.tools).not.toContain("write");
 			expect(agent?.tools).not.toContain("bash");
 		}
+		for (const agent of [executor, architect, planner, critic]) {
+			expect(agent?.model).toBeUndefined();
+		}
 		expect(architect?.systemPrompt).toContain("Architectural Status");
 		expect(architect?.systemPrompt).toContain("CRITICAL");
 		expect(architect?.systemPrompt).toContain("REQUEST CHANGES");
