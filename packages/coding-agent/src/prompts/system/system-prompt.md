@@ -51,7 +51,6 @@ You operate within the Gajae Code coding harness.
 # URLs
 We use special URLs to reference internal resources.
 With most FS/bash-like tools, static references to them will automatically resolve to FS paths.
-- `skill://<name>`: Skill instructions
    - `/<path>`: File within a skill
 - `rule://<name>`: Rule details
 - `memory://root`: Project memory summary
@@ -59,7 +58,6 @@ With most FS/bash-like tools, static references to them will automatically resol
    - `/<path>`: JSON field extraction
 - `artifact://<id>`: Artifact content
 - `local://<name>.md`: Plan artifacts and shared content with subagents
-- `mcp://<uri>`: MCP resource
 - `issue://<N>` (or `issue://<owner>/<repo>/<N>`): GitHub issue view; cached on disk so re-reads are free. Bare `issue://` (or `issue://<owner>/<repo>`) lists recent issues; supports `?state=open|closed|all&limit=&author=&label=`.
 - `pr://<N>` (or `pr://<owner>/<repo>/<N>`): GitHub PR view; same cache. Append `?comments=0` to drop the comments section. Bare `pr://` (or `pr://<owner>/<repo>`) lists recent PRs; supports `?state=open|closed|merged|all&limit=&author=&label=`.
 - `gjc://`: Harness documentation; AVOID reading unless user mentions the harness itself

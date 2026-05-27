@@ -1,7 +1,7 @@
 /**
  * Types for the internal URL routing system.
  *
- * Internal URLs (agent://, artifact://, memory://, skill://, rule://, mcp://, gjc://, local://) are resolved by tools like read,
+ * Internal URLs (agent://, artifact://, memory://, rule://, gjc://, local://) are resolved by tools like read,
  * providing access to agent outputs and server resources without exposing filesystem paths.
  */
 
@@ -76,7 +76,7 @@ export interface WriteContext {
 }
 
 /**
- * Handler for a specific internal URL scheme (e.g., agent://, memory://, skill://, mcp://).
+ * Handler for a specific internal URL scheme (e.g., agent://, memory://).
  */
 export interface ProtocolHandler {
 	/** The scheme this handler processes (without trailing ://) */

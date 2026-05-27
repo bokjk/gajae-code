@@ -23,7 +23,7 @@ Core exports for embedders:
 - `AuthStorage`
 - `ModelRegistry`
 - `discoverAuthStorage`
-- Discovery helpers (`discoverExtensions`, `discoverSkills`, `discoverContextFiles`, `discoverPromptTemplates`, `discoverSlashCommands`, `discoverCustomTSCommands`, `discoverMCPServers`)
+- Discovery helpers for retained context/prompt surfaces (`discoverContextFiles`, `discoverPromptTemplates`)
 - Tool factory surface (`createTools`, `BUILTIN_TOOLS`, tool classes)
 
 ## Quick start (auto-discovery defaults)
@@ -63,9 +63,8 @@ If omitted, it resolves:
 - `modelRegistry`: `new ModelRegistry(authStorage)` + background `refreshInBackground()` when the registry is not provided
 - `settings`: `await Settings.init({ cwd, agentDir })`
 - `sessionManager`: `SessionManager.create(cwd)` (file-backed)
-- skills/context files/prompt templates/slash commands/extensions/custom TS commands
+- context files and prompt templates
 - built-in tools via `createTools(...)`
-- MCP tools when `enableMCP: true` is supplied (opt-in by default)
 - LSP integration (enabled by default)
 - `eventBus`: new `EventBus()` unless supplied
 
@@ -228,13 +227,12 @@ Related APIs:
 - `sendCustomMessage({ customType, content, ... }, { deliverAs?, triggerTurn? })`
 - `abort()`
 
-## Tools and extension integration
+## Tools integration
 
 ### Built-ins and filtering
 
 - Built-ins come from `createTools(...)` and `BUILTIN_TOOLS`.
 - `toolNames` acts as an allowlist for built-ins.
-- `customTools` and extension-registered tools are still included.
 - Hidden tools (for example `yield`) are opt-in unless required by options.
 
 ```ts
@@ -244,13 +242,6 @@ const { session } = await createAgentSession({
 });
 ```
 
-### Extensions
-
-- `extensions`: inline `ExtensionFactory[]`
-- `additionalExtensionPaths`: load extra extension files
-- `disableExtensionDiscovery`: disable automatic extension scanning
-- `preloadedExtensions`: reuse already loaded extension set
-
 ### Runtime tool set changes
 
 `AgentSession` supports runtime activation updates:
@@ -258,7 +249,6 @@ const { session } = await createAgentSession({
 - `getActiveToolNames()`
 - `getAllToolNames()`
 - `setActiveToolsByName(names)`
-- `refreshMCPTools(mcpTools)`
 
 System prompt is rebuilt to reflect active tool changes.
 
@@ -267,13 +257,8 @@ System prompt is rebuilt to reflect active tool changes.
 Use these when you want partial control without recreating internal discovery logic:
 
 - `discoverAuthStorage(agentDir?)`
-- `discoverExtensions(cwd?)`
-- `discoverSkills(cwd?, _agentDir?, settings?)`
 - `discoverContextFiles(cwd?, _agentDir?)`
 - `discoverPromptTemplates(cwd?, agentDir?)`
-- `discoverSlashCommands(cwd?)`
-- `discoverCustomTSCommands(cwd?, agentDir?)`
-- `discoverMCPServers(cwd?)`
 - `buildSystemPrompt(options?)`
 
 ## Subagent-oriented options
@@ -292,9 +277,7 @@ These are optional for normal single-agent embedding.
 ```ts
 type CreateAgentSessionResult = {
   session: AgentSession;
-  extensionsResult: LoadExtensionsResult;
   setToolUIContext: (uiContext: ExtensionUIContext, hasUI: boolean) => void;
-  mcpManager?: MCPManager;
   modelFallbackMessage?: string;
   lspServers?: Array<{
     name: string;
@@ -306,13 +289,13 @@ type CreateAgentSessionResult = {
 };
 ```
 
-Use `setToolUIContext(...)` only if your embedder provides UI capabilities that tools/extensions should call into.
+Use `setToolUIContext(...)` only if your embedder provides UI capabilities that tools should call into.
 
 ## Startup performance
 
 `createAgentSession()` runs two background optimizations to overlap I/O with the rest of session setup:
 
-- **Model-host preconnect.** As soon as the model is resolved, the SDK fires a best-effort `fetch.preconnect(model.baseUrl)` so DNS + TCP + TLS + HTTP/2 to the provider's host happens in parallel with extension/skill load, tool registry build, and system-prompt assembly. The first real `fetch(...)` then reuses the warm connection, saving 100–300 ms on transcontinental hops (e.g. residential IP → `api.anthropic.com`). Implementation lives in `preconnectModelHost()` in `packages/coding-agent/src/sdk.ts`. If `fetch.preconnect` is unavailable (non-Bun runtime) or the call throws, the optimization is silently skipped — never a hard dependency. Applies to every mode (interactive, print, RPC, ACP).
+- **Model-host preconnect.** As soon as the model is resolved, the SDK fires a best-effort `fetch.preconnect(model.baseUrl)` so DNS + TCP + TLS + HTTP/2 to the provider's host happens in parallel with tool registry build, and system-prompt assembly. The first real `fetch(...)` then reuses the warm connection, saving 100–300 ms on transcontinental hops (e.g. residential IP → `api.anthropic.com`). Implementation lives in `preconnectModelHost()` in `packages/coding-agent/src/sdk.ts`. If `fetch.preconnect` is unavailable (non-Bun runtime) or the call throws, the optimization is silently skipped — never a hard dependency. Applies to every mode (interactive, print, RPC, ACP).
 - **Conditional LSP warmup.** Startup LSP servers (those returned by `discoverStartupLspServers(cwd)`) are only warmed when **all** of these hold:
   - `enableLsp !== false` on the session options, **and**
   - `options.hasUI === true` (interactive TUI), **and**
@@ -346,7 +329,6 @@ const { session } = await createAgentSession({
   settings,
   sessionManager: SessionManager.inMemory(),
   toolNames: ["read", "grep", "find", "edit", "write"],
-  enableMCP: false,
   enableLsp: true,
 });
 

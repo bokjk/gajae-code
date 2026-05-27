@@ -21,7 +21,6 @@ import {
 } from "@gajae-code/ai/providers/openai-codex-responses";
 import type { Component } from "@gajae-code/tui";
 import {
-	$env,
 	$flag,
 	getAgentDbPath,
 	getAgentDir,
@@ -31,9 +30,7 @@ import {
 	prompt,
 	Snowflake,
 } from "@gajae-code/utils";
-import chalk from "chalk";
 import { type AsyncJob, AsyncJobManager, isBackgroundJobSupportEnabled } from "./async";
-import { createAutoresearchExtension } from "./autoresearch";
 import { loadCapability } from "./capability";
 import { type Rule, ruleCapability, setActiveRules } from "./capability/rule";
 import { ModelRegistry } from "./config/model-registry";
@@ -52,16 +49,10 @@ import { resolveConfigValue } from "./config/resolve-config-value";
 import { initializeWithSettings } from "./discovery";
 import { disposeAllKernelSessions, disposeKernelSessionsByOwner } from "./eval/py/executor";
 import { TtsrManager } from "./export/ttsr";
-import {
-	type CustomCommandsLoadResult,
-	type LoadedCustomCommand,
-	loadCustomCommands as loadCustomCommandsInternal,
-} from "./extensibility/custom-commands";
-import { discoverAndLoadCustomTools } from "./extensibility/custom-tools";
+import type { CustomCommandsLoadResult, LoadedCustomCommand } from "./extensibility/custom-commands";
 import type { CustomTool, CustomToolContext, CustomToolSessionEvent } from "./extensibility/custom-tools/types";
 import { CustomToolAdapter } from "./extensibility/custom-tools/wrapper";
 import {
-	discoverAndLoadExtensions,
 	type ExtensionContext,
 	type ExtensionFactory,
 	ExtensionRunner,
@@ -69,29 +60,19 @@ import {
 	type ExtensionUIContext,
 	type LoadExtensionsResult,
 	loadExtensionFromFactory,
-	loadExtensions,
 	type ToolDefinition,
 	wrapRegisteredTools,
 } from "./extensibility/extensions";
-import {
-	loadSkills as loadSkillsInternal,
-	type Skill,
-	type SkillWarning,
-	setActiveSkills,
-} from "./extensibility/skills";
-import { type FileSlashCommand, loadSlashCommands as loadSlashCommandsInternal } from "./extensibility/slash-commands";
+import { ExtensionRuntime } from "./extensibility/extensions/loader";
+import { type Skill, type SkillWarning, setActiveSkills } from "./extensibility/skills";
+import type { FileSlashCommand } from "./extensibility/slash-commands";
 import type { HindsightSessionState } from "./hindsight/state";
 import { LocalProtocolHandler, type LocalProtocolOptions } from "./internal-urls";
 import { LSP_STARTUP_EVENT_CHANNEL, type LspStartupEvent } from "./lsp/startup-events";
 import { resolveMemoryBackend } from "./memory-backend";
 import asyncResultTemplate from "./prompts/tools/async-result.md" with { type: "text" };
 import { AgentRegistry, MAIN_AGENT_ID } from "./registry/agent-registry";
-import { discoverAndLoadMCPTools, MCPManager, type MCPToolsLoadResult } from "./runtime-mcp";
-import {
-	collectDiscoverableMCPTools,
-	formatDiscoverableMCPToolServerSummary,
-	selectDiscoverableMCPToolNamesByServer,
-} from "./runtime-mcp/discoverable-tool-metadata";
+import { MCPManager } from "./runtime-mcp";
 import {
 	collectEnvSecrets,
 	deobfuscateSessionContext,
@@ -114,11 +95,7 @@ import {
 } from "./system-prompt";
 import { AgentOutputManager } from "./task/output-manager";
 import { parseThinkingLevel, resolveThinkingLevelForModel, toReasoningEffort } from "./thinking";
-import {
-	collectDiscoverableTools,
-	type DiscoverableTool,
-	summarizeDiscoverableTools,
-} from "./tool-discovery/tool-index";
+import { collectDiscoverableTools, type DiscoverableTool } from "./tool-discovery/tool-index";
 import {
 	BashTool,
 	BUILTIN_TOOLS,
@@ -148,7 +125,6 @@ import {
 import { ToolContextStore } from "./tools/context";
 import { getImageGenTools } from "./tools/image-gen";
 import { wrapToolWithMetaNotice } from "./tools/output-meta";
-import { queueResolveHandler } from "./tools/resolve";
 import { EventBus } from "./utils/event-bus";
 import { buildNamedToolChoice } from "./utils/tool-choice";
 import { buildWorkspaceTree, type WorkspaceTree } from "./workspace-tree";
@@ -290,7 +266,7 @@ export interface CreateAgentSessionOptions {
 	/** File-based slash commands. Default: discovered from commands/ directories */
 	slashCommands?: FileSlashCommand[];
 
-	/** Enable MCP server discovery from .mcp.json files. Default: false (opt-in). */
+	/** @deprecated MCP runtime discovery is quarantined and ignored. */
 	enableMCP?: boolean;
 	/** Existing MCP manager to reuse (skips discovery, propagates to toolSession). */
 	mcpManager?: MCPManager;
@@ -370,7 +346,6 @@ export type { CustomTool, CustomToolFactory } from "./extensibility/custom-tools
 export type * from "./extensibility/extensions";
 export type { Skill } from "./extensibility/skills";
 export type { FileSlashCommand } from "./extensibility/slash-commands";
-export type { MCPManager, MCPServerConfig, MCPServerConnection, MCPToolsLoadResult } from "./runtime-mcp";
 export type { Tool } from "./tools";
 export { buildDirectoryTree, buildWorkspaceTree, type DirectoryTree, type WorkspaceTree } from "./workspace-tree";
 
@@ -440,24 +415,19 @@ export async function discoverAuthStorage(agentDir: string = getDefaultAgentDir(
 /**
  * Discover extensions from cwd.
  */
-export async function discoverExtensions(cwd?: string): Promise<LoadExtensionsResult> {
-	const resolvedCwd = cwd ?? getProjectDir();
-
-	return discoverAndLoadExtensions([], resolvedCwd);
+export async function discoverExtensions(_cwd?: string): Promise<LoadExtensionsResult> {
+	return { extensions: [], errors: [], runtime: new ExtensionRuntime() };
 }
 
 /**
  * Discover skills from cwd and agentDir.
  */
 export async function discoverSkills(
-	cwd?: string,
+	_cwd?: string,
 	_agentDir?: string,
-	settings?: SkillsSettings,
+	_settings?: SkillsSettings,
 ): Promise<{ skills: Skill[]; warnings: SkillWarning[] }> {
-	return await loadSkillsInternal({
-		...settings,
-		cwd: cwd ?? getProjectDir(),
-	});
+	return { skills: [], warnings: [] };
 }
 
 /**
@@ -486,30 +456,15 @@ export async function discoverPromptTemplates(cwd?: string, agentDir?: string): 
 /**
  * Discover file-based slash commands from commands/ directories.
  */
-export async function discoverSlashCommands(cwd?: string): Promise<FileSlashCommand[]> {
-	return loadSlashCommandsInternal({ cwd: cwd ?? getProjectDir() });
+export async function discoverSlashCommands(_cwd?: string): Promise<FileSlashCommand[]> {
+	return [];
 }
 
 /**
  * Discover custom commands (TypeScript slash commands) from cwd and agentDir.
  */
-export async function discoverCustomTSCommands(cwd?: string, agentDir?: string): Promise<CustomCommandsLoadResult> {
-	const resolvedCwd = cwd ?? getProjectDir();
-	const resolvedAgentDir = agentDir ?? getDefaultAgentDir();
-
-	return loadCustomCommandsInternal({
-		cwd: resolvedCwd,
-		agentDir: resolvedAgentDir,
-	});
-}
-
-/**
- * Discover MCP servers from .mcp.json files.
- * Returns the manager and loaded tools.
- */
-export async function discoverMCPServers(cwd?: string): Promise<MCPToolsLoadResult> {
-	const resolvedCwd = cwd ?? getProjectDir();
-	return discoverAndLoadMCPTools(resolvedCwd);
+export async function discoverCustomTSCommands(_cwd?: string, _agentDir?: string): Promise<CustomCommandsLoadResult> {
+	return { commands: [], errors: [] };
 }
 
 // API Key Helpers
@@ -867,20 +822,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		? Promise.resolve(options.promptTemplates)
 		: logger.time("discoverPromptTemplates", discoverPromptTemplates, cwd, agentDir);
 	promptTemplatesPromise.catch(() => {});
-	const slashCommandsPromise = options.slashCommands
-		? Promise.resolve(options.slashCommands)
-		: logger.time("discoverSlashCommands", discoverSlashCommands, cwd);
+	const slashCommandsPromise = options.slashCommands ? Promise.resolve(options.slashCommands) : Promise.resolve([]);
 	slashCommandsPromise.catch(() => {});
-	const skillsSettings = settings.getGroup("skills");
-	const disabledExtensionIds = settings.get("disabledExtensions") ?? [];
-	const discoveredSkillsPromise =
-		options.skills === undefined
-			? logger.time("discoverSkills", discoverSkills, cwd, agentDir, {
-					...skillsSettings,
-					disabledExtensions: disabledExtensionIds,
-				})
-			: undefined;
-	discoveredSkillsPromise?.catch(() => {});
 
 	// Initialize provider preferences from settings
 	const webSearchProvider = settings.get("providers.webSearch");
@@ -1027,9 +970,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		skills = options.skills;
 		skillWarnings = [];
 	} else {
-		const discovered = await (discoveredSkillsPromise ?? Promise.resolve({ skills: [], warnings: [] }));
-		skills = discovered.skills;
-		skillWarnings = discovered.warnings;
+		skills = [];
+		skillWarnings = [];
 	}
 
 	// Discover rules and bucket them in one pass to avoid repeated scans over large rule sets.
@@ -1264,45 +1206,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		// Create built-in tools (already wrapped with meta notice formatting)
 		const builtinTools = await logger.time("createAllTools", createTools, toolSession, options.toolNames);
 
-		// Discover MCP tools from .mcp.json files
-		let mcpManager: MCPManager | undefined = options.mcpManager;
-		const enableMCP = options.enableMCP ?? false;
+		// MCP runtime discovery is quarantined for the GJC surface. Keep an
+		// explicitly supplied manager only for legacy in-process callers that own
+		// lifecycle themselves; never discover project/user MCP configs here.
+		const mcpManager: MCPManager | undefined = options.mcpManager;
 		const customTools: CustomTool[] = [];
-		if (enableMCP && !mcpManager) {
-			const mcpResult = await logger.time("discoverAndLoadMCPTools", discoverAndLoadMCPTools, cwd, {
-				onConnecting: serverNames => {
-					if (options.hasUI && serverNames.length > 0) {
-						process.stderr.write(`${chalk.gray(`Connecting to MCP servers: ${serverNames.join(", ")}…`)}\n`);
-					}
-				},
-				enableProjectConfig: settings.get("mcp.enableProjectConfig") ?? true,
-				// Always filter Exa - we have native integration
-				filterExa: true,
-				// Filter browser MCP servers when builtin browser tool is active
-				filterBrowser: settings.get("browser.enabled") ?? false,
-				cacheStorage: settings.getStorage(),
-				authStorage,
-			});
-			mcpManager = mcpResult.manager;
-
-			if (settings.get("mcp.notifications")) {
-				mcpManager.setNotificationsEnabled(true);
-			}
-			// If we extracted Exa API keys from MCP configs and EXA_API_KEY isn't set, use the first one
-			if (mcpResult.exaApiKeys.length > 0 && !$env.EXA_API_KEY) {
-				Bun.env.EXA_API_KEY = mcpResult.exaApiKeys[0];
-			}
-
-			// Log MCP errors
-			for (const { path, error } of mcpResult.errors) {
-				logger.error("MCP tool load failed", { path, error });
-			}
-
-			if (mcpResult.tools.length > 0) {
-				// MCP tools are LoadedCustomTool, extract the tool property
-				customTools.push(...mcpResult.tools.map(loaded => loaded.tool));
-			}
-		}
 		// Only top-level sessions own the global MCPManager. Subagents already
 		// receive the parent's manager via `options.mcpManager`, and reassigning
 		// the singleton to the same value is a no-op \u2014 keep the gate explicit
@@ -1320,55 +1228,15 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			customTools.push(...getSearchTools());
 		}
 
-		// Discover and load custom tools from .gjc/tools/, .claude/tools/, etc.
-		const builtInToolNames = builtinTools.map(t => t.name);
-		const discoveredCustomTools = await logger.time(
-			"discoverAndLoadCustomTools",
-			discoverAndLoadCustomTools,
-			[],
-			cwd,
-			builtInToolNames,
-			action => queueResolveHandler(toolSession, action),
-		);
-		for (const { path, error } of discoveredCustomTools.errors) {
-			logger.error("Custom tool load failed", { path, error });
-		}
-		if (discoveredCustomTools.tools.length > 0) {
-			customTools.push(...discoveredCustomTools.tools.map(loaded => loaded.tool));
-		}
-
-		const inlineExtensions: ExtensionFactory[] = options.extensions ? [...options.extensions] : [];
-		inlineExtensions.push(createAutoresearchExtension);
+		// Custom tool and extension discovery is quarantined from the public GJC utility surface.
+		const inlineExtensions: ExtensionFactory[] = [];
 		if (customTools.length > 0) {
 			inlineExtensions.push(createCustomToolsExtension(customTools));
 		}
 
-		// Load extensions (discovers from standard locations + configured paths)
-		let extensionsResult: LoadExtensionsResult;
-		if (options.disableExtensionDiscovery) {
-			const configuredPaths = options.additionalExtensionPaths ?? [];
-			extensionsResult = await logger.time("loadExtensions", loadExtensions, configuredPaths, cwd, eventBus);
-			for (const { path, error } of extensionsResult.errors) {
-				logger.error("Failed to load extension", { path, error });
-			}
-		} else if (options.preloadedExtensions) {
-			extensionsResult = options.preloadedExtensions;
-		} else {
-			// Merge CLI extension paths with settings extension paths
-			const configuredPaths = [...(options.additionalExtensionPaths ?? []), ...(settings.get("extensions") ?? [])];
-			const disabledExtensionIds = settings.get("disabledExtensions") ?? [];
-			extensionsResult = await logger.time(
-				"discoverAndLoadExtensions",
-				discoverAndLoadExtensions,
-				configuredPaths,
-				cwd,
-				eventBus,
-				disabledExtensionIds,
-			);
-			for (const { path, error } of extensionsResult.errors) {
-				logger.error("Failed to load extension", { path, error });
-			}
-		}
+		// Extension/module discovery is quarantined; retain only the private
+		// runtime needed to adapt explicitly supplied SDK custom tools.
+		const extensionsResult: LoadExtensionsResult = { extensions: [], errors: [], runtime: new ExtensionRuntime() };
 
 		// Load inline extensions from factories
 		if (inlineExtensions.length > 0) {
@@ -1443,15 +1311,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			}
 		}
 
-		// Discover custom commands (TypeScript slash commands)
-		const customCommandsResult: CustomCommandsLoadResult = options.disableExtensionDiscovery
-			? { commands: [], errors: [] }
-			: await logger.time("discoverCustomCommands", loadCustomCommandsInternal, { cwd, agentDir });
-		if (!options.disableExtensionDiscovery) {
-			for (const { path, error } of customCommandsResult.errors) {
-				logger.error("Failed to load custom command", { path, error });
-			}
-		}
+		const customCommandsResult: CustomCommandsLoadResult = { commands: [], errors: [] };
 
 		let extensionRunner: ExtensionRunner | undefined;
 		if (extensionsResult.extensions.length > 0) {
@@ -1581,7 +1441,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			tools: Map<string, AgentTool>,
 		): Promise<BuildSystemPromptResult> => {
 			toolContextStore.setToolNames(toolNames);
-			const discoverableMCPTools = mcpDiscoveryEnabled ? collectDiscoverableMCPTools(tools.values()) : [];
 			const activeToolNames = new Set(toolNames);
 			const discoverableBuiltinTools: DiscoverableTool[] =
 				effectiveDiscoveryMode === "all"
@@ -1592,21 +1451,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 							{ source: "builtin" },
 						)
 					: [];
-			const discoverableToolsForDesc: DiscoverableTool[] = [
-				...discoverableBuiltinTools,
-				...discoverableMCPTools.map(t => ({
-					name: t.name,
-					label: t.label,
-					summary: t.description,
-					source: "mcp" as const,
-					serverName: t.serverName,
-					mcpToolName: t.mcpToolName,
-					schemaKeys: t.schemaKeys,
-				})),
-			];
-			const discoverableToolSummary = summarizeDiscoverableTools(discoverableToolsForDesc);
-			const hasDiscoverableTools =
-				mcpDiscoveryEnabled && toolNames.includes("search_tool_bm25") && discoverableToolsForDesc.length > 0;
+			const discoverableToolsForDesc: DiscoverableTool[] = [...discoverableBuiltinTools];
 			const promptTools = buildSystemPromptToolMetadata(tools, {
 				search_tool_bm25: { description: renderSearchToolBm25Description(discoverableToolsForDesc) },
 			});
@@ -1646,8 +1491,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				appendSystemPrompt: appendPrompt,
 				repeatToolDescriptions,
 				intentField,
-				mcpDiscoveryMode: hasDiscoverableTools,
-				mcpDiscoveryServerSummaries: discoverableToolSummary.servers.map(formatDiscoverableMCPToolServerSummary),
+				mcpDiscoveryMode: false,
+				mcpDiscoveryServerSummaries: [],
 				eagerTasks,
 				secretsEnabled,
 				workspaceTree: workspaceTreePromise,
@@ -1670,15 +1515,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			toolNamesFromRegistry;
 		const normalizedRequested = requestedToolNames.filter(name => toolRegistry.has(name));
 		const requestedToolNameSet = new Set(normalizedRequested);
-		// Effective discovery mode: tools.discoveryMode takes precedence; mcp.discoveryMode is back-compat alias.
+		// Effective discovery mode only covers built-in tools; MCP tool discovery
+		// is quarantined from the GJC public surface.
 		const toolsDiscoveryModeSetting = settings.get("tools.discoveryMode");
-		const effectiveDiscoveryMode: "off" | "mcp-only" | "all" =
-			toolsDiscoveryModeSetting !== "off"
-				? (toolsDiscoveryModeSetting as "off" | "mcp-only" | "all")
-				: settings.get("mcp.discoveryMode")
-					? "mcp-only"
-					: "off";
-		const mcpDiscoveryEnabled = effectiveDiscoveryMode !== "off"; // back-compat: true when any discovery active
+		const effectiveDiscoveryMode: "off" | "all" = toolsDiscoveryModeSetting === "all" ? "all" : "off";
+		const mcpDiscoveryEnabled = false;
 		const defaultInactiveToolNames = new Set(
 			registeredTools.filter(tool => tool.definition.defaultInactive).map(tool => tool.definition.name),
 		);
@@ -1686,21 +1527,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		const initialRequestedActiveToolNames = options.toolNames
 			? requestedActiveToolNames
 			: requestedActiveToolNames.filter(name => !defaultInactiveToolNames.has(name));
-		const discoverableMCPToolNames = new Set(
-			collectDiscoverableMCPTools(toolRegistry.values()).map(tool => tool.name),
-		);
-		const explicitlyRequestedMCPToolNames = options.toolNames
-			? requestedActiveToolNames.filter(name => discoverableMCPToolNames.has(name))
-			: [];
-		const discoveryDefaultServers = new Set(
-			(settings.get("mcp.discoveryDefaultServers") ?? []).map(serverName => serverName.trim()).filter(Boolean),
-		);
-		const discoveryDefaultServerToolNames = mcpDiscoveryEnabled
-			? selectDiscoverableMCPToolNamesByServer(
-					collectDiscoverableMCPTools(toolRegistry.values()),
-					discoveryDefaultServers,
-				)
-			: [];
+		const discoverableMCPToolNames = new Set<string>();
+		const explicitlyRequestedMCPToolNames: string[] = [];
+		const discoveryDefaultServerToolNames: string[] = [];
 		let initialSelectedMCPToolNames: string[] = [];
 		let defaultSelectedMCPToolNames: string[] = [];
 		let initialToolNames = [...initialRequestedActiveToolNames];
@@ -1991,7 +1820,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			initialSelectedMCPToolNames,
 			defaultSelectedMCPToolNames,
 			persistInitialMCPToolSelection: !hasExistingSession,
-			defaultSelectedMCPServerNames: [...discoveryDefaultServers],
+			defaultSelectedMCPServerNames: [],
 			ttsrManager,
 			obfuscator,
 			agentId: resolvedAgentId,

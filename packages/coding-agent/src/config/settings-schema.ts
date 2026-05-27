@@ -296,17 +296,7 @@ export const SETTINGS_SCHEMA = {
 	"marketplace.autoUpdate": {
 		type: "enum",
 		values: ["off", "notify", "auto"] as const,
-		default: "notify",
-		ui: {
-			tab: "tools",
-			label: "Marketplace Auto-Update",
-			description: "Check for plugin updates on startup (off/notify/auto)",
-			options: [
-				{ value: "off", label: "Off", description: "Don't check for plugin updates" },
-				{ value: "notify", label: "Notify", description: "Check on startup and notify when updates are available" },
-				{ value: "auto", label: "Auto", description: "Check on startup and auto-install updates" },
-			],
-		},
+		default: "off",
 	},
 
 	enabledModels: { type: "array", default: EMPTY_STRING_ARRAY },
@@ -529,12 +519,7 @@ export const SETTINGS_SCHEMA = {
 
 	"statusLine.showHookStatus": {
 		type: "boolean",
-		default: true,
-		ui: {
-			tab: "appearance",
-			label: "Show Hook Status",
-			description: "Display hook status messages below status line",
-		},
+		default: false,
 	},
 
 	"statusLine.leftSegments": { type: "array", default: [] as StatusLineSegmentId[] },
@@ -2134,13 +2119,12 @@ export const SETTINGS_SCHEMA = {
 	// Tool Discovery
 	"tools.discoveryMode": {
 		type: "enum",
-		values: ["off", "mcp-only", "all"] as const,
+		values: ["off", "all"] as const,
 		default: "off",
 		ui: {
 			tab: "tools",
 			label: "Tool Discovery",
-			description:
-				"Hide tools behind a search tool to save tokens. 'mcp-only' hides MCP tools; 'all' hides all non-essential built-ins too.",
+			description: "Hide non-essential built-in tools behind a search tool to save tokens.",
 		},
 	},
 
@@ -2158,48 +2142,27 @@ export const SETTINGS_SCHEMA = {
 	// MCP
 	"mcp.enableProjectConfig": {
 		type: "boolean",
-		default: true,
-		ui: { tab: "tools", label: "MCP Project Config", description: "Load .mcp.json/mcp.json from project root" },
+		default: false,
 	},
 
 	"mcp.discoveryMode": {
 		type: "boolean",
 		default: false,
-		ui: {
-			tab: "tools",
-			label: "MCP Tool Discovery",
-			description: "Hide MCP tools by default and expose them through a tool discovery tool",
-		},
 	},
 
 	"mcp.discoveryDefaultServers": {
 		type: "array",
 		default: [] as string[],
-		ui: {
-			tab: "tools",
-			label: "MCP Discovery Default Servers",
-			description: "Keep MCP tools from these servers visible while discovery mode hides other MCP tools",
-		},
 	},
 
 	"mcp.notifications": {
 		type: "boolean",
 		default: false,
-		ui: {
-			tab: "tools",
-			label: "MCP Update Injection",
-			description: "Inject MCP resource updates into the agent conversation",
-		},
 	},
 
 	"mcp.notificationDebounceMs": {
 		type: "number",
 		default: 500,
-		ui: {
-			tab: "tools",
-			label: "MCP Notification Debounce",
-			description: "Debounce window for MCP resource update notifications before injecting into conversation",
-		},
 	},
 
 	// ────────────────────────────────────────────────────────────────────────
@@ -2459,23 +2422,22 @@ export const SETTINGS_SCHEMA = {
 	},
 
 	// Skills
-	"skills.enabled": { type: "boolean", default: true },
+	"skills.enabled": { type: "boolean", default: false },
 
 	"skills.enableSkillCommands": {
 		type: "boolean",
-		default: true,
-		ui: { tab: "tasks", label: "Skill Commands", description: "Register skills as /skill:name commands" },
+		default: false,
 	},
 
-	"skills.enableCodexUser": { type: "boolean", default: true },
+	"skills.enableCodexUser": { type: "boolean", default: false },
 
-	"skills.enableClaudeUser": { type: "boolean", default: true },
+	"skills.enableClaudeUser": { type: "boolean", default: false },
 
-	"skills.enableClaudeProject": { type: "boolean", default: true },
+	"skills.enableClaudeProject": { type: "boolean", default: false },
 
-	"skills.enablePiUser": { type: "boolean", default: true },
+	"skills.enablePiUser": { type: "boolean", default: false },
 
-	"skills.enablePiProject": { type: "boolean", default: true },
+	"skills.enablePiProject": { type: "boolean", default: false },
 
 	"skills.customDirectories": { type: "array", default: [] as string[] },
 
@@ -2486,30 +2448,22 @@ export const SETTINGS_SCHEMA = {
 	// Commands
 	"commands.enableClaudeUser": {
 		type: "boolean",
-		default: true,
-		ui: { tab: "tasks", label: "Claude User Commands", description: "Load commands from ~/.claude/commands/" },
+		default: false,
 	},
 
 	"commands.enableClaudeProject": {
 		type: "boolean",
-		default: true,
-		ui: { tab: "tasks", label: "Claude Project Commands", description: "Load commands from .claude/commands/" },
+		default: false,
 	},
 
 	"commands.enableOpencodeUser": {
 		type: "boolean",
-		default: true,
-		ui: {
-			tab: "tasks",
-			label: "OpenCode User Commands",
-			description: "Load commands from ~/.config/opencode/commands/",
-		},
+		default: false,
 	},
 
 	"commands.enableOpencodeProject": {
 		type: "boolean",
-		default: true,
-		ui: { tab: "tasks", label: "OpenCode Project Commands", description: "Load commands from .opencode/commands/" },
+		default: false,
 	},
 
 	// ────────────────────────────────────────────────────────────────────────

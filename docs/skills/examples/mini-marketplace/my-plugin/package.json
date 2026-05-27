@@ -1,7 +1,0 @@
-{
-  "name": "my-plugin",
-  "version": "0.1.0",
-  "gjc": {
-    "extensions": ["./index.ts"]
-  }
-}

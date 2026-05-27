@@ -26,7 +26,6 @@ import planModeSubagentPrompt from "../prompts/system/plan-mode-subagent.md" wit
 import subagentUserPromptTemplate from "../prompts/system/subagent-user-prompt.md" with { type: "text" };
 import taskDescriptionTemplate from "../prompts/tools/task.md" with { type: "text" };
 import taskSummaryTemplate from "../prompts/tools/task-summary.md" with { type: "text" };
-import { MCPManager } from "../runtime-mcp/manager";
 import { formatBytes, formatDuration } from "../tools/render-utils";
 import {
 	type AgentDefinition,
@@ -914,7 +913,6 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 						authStorage: this.session.authStorage,
 						modelRegistry: this.session.modelRegistry,
 						settings: this.session.settings,
-						mcpManager: MCPManager.instance(),
 						contextFiles,
 						skills: availableSkills,
 						autoloadSkills: resolvedAutoloadSkills,
@@ -969,7 +967,6 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 						authStorage: this.session.authStorage,
 						modelRegistry: this.session.modelRegistry,
 						settings: this.session.settings,
-						mcpManager: MCPManager.instance(),
 						contextFiles,
 						skills: availableSkills,
 						autoloadSkills: resolvedAutoloadSkills,

@@ -16,8 +16,7 @@ const FILE_RAW_ONLY_RE = /^raw$/i;
 const INTERNAL_URL_SELECTOR_PART_RE =
 	/^(?:raw|conflicts|L?\d+(?:[-+]L?\d+|-)?(?:,L?\d+(?:[-+]L?\d+|-)?)*|-\d+(?:[-+]\d+)?)$/i;
 // Schemes whose host grammar is identifier-shaped, so any trailing
-// `:<selector-chunk>` is unambiguously a read-tool selector. `mcp://` is
-// excluded because mcp resource URIs may legitimately contain colons.
+// `:<selector-chunk>` is unambiguously a read-tool selector.
 const INTERNAL_SCHEMES_WITH_SELECTORS: Record<string, true> = {
 	agent: true,
 	artifact: true,
@@ -27,18 +26,10 @@ const INTERNAL_SCHEMES_WITH_SELECTORS: Record<string, true> = {
 	gjc: true,
 	pr: true,
 	rule: true,
-	skill: true,
 };
 const INTERNAL_URL_SCHEME_RE = /^([a-z][a-z0-9+.-]*):\/\//i;
 const NARROW_NO_BREAK_SPACE = "\u202F";
-const TOP_LEVEL_INTERNAL_URL_PREFIXES = [
-	"agent://",
-	"artifact://",
-	"skill://",
-	"rule://",
-	"local://",
-	"mcp://",
-] as const;
+const TOP_LEVEL_INTERNAL_URL_PREFIXES = ["agent://", "artifact://", "rule://", "local://"] as const;
 
 function normalizeUnicodeSpaces(str: string): string {
 	return str.replace(UNICODE_SPACES, " ");
@@ -89,10 +80,8 @@ function normalizeAtPrefix(filePath: string): string {
 		// Internal URL shorthands
 		withoutAt.startsWith("agent://") ||
 		withoutAt.startsWith("artifact://") ||
-		withoutAt.startsWith("skill://") ||
 		withoutAt.startsWith("rule://") ||
-		withoutAt.startsWith("local:") ||
-		withoutAt.startsWith("mcp://")
+		withoutAt.startsWith("local:")
 	) {
 		return withoutAt;
 	}
@@ -168,8 +157,7 @@ export function splitPathAndSel(rawPath: string): { path: string; sel?: string }
  * This function iteratively peels selector-shaped chunks (well-formed plus
  * common malformed shapes like `:-N`) so the rest of the read tool can pass a
  * clean URL to the protocol handler and surface selector errors via parseSel
- * instead of as misleading "host invalid" errors from the handler. Schemes
- * whose resource URIs may legitimately contain colons (`mcp://`) are skipped.
+ * instead of as misleading "host invalid" errors from the handler.
  *
  * Falls back to the input unchanged when nothing matches.
  */

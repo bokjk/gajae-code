@@ -82,7 +82,6 @@ import { CommandController } from "./controllers/command-controller";
 import { EventController } from "./controllers/event-controller";
 import { ExtensionUiController } from "./controllers/extension-ui-controller";
 import { InputController } from "./controllers/input-controller";
-import { MCPCommandController } from "./controllers/runtime-mcp-command-controller";
 import { SelectorController } from "./controllers/selector-controller";
 import { SSHCommandController } from "./controllers/ssh-command-controller";
 import { TodoCommandController } from "./controllers/todo-command-controller";
@@ -2464,9 +2463,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		return this.#commandController.handlePythonCommand(code, excludeFromContext);
 	}
 
-	async handleMCPCommand(text: string): Promise<void> {
-		const controller = new MCPCommandController(this);
-		await controller.handle(text);
+	async handleMCPCommand(_text: string): Promise<void> {
+		this.showWarning(`MCP commands are not available in ${APP_NAME}.`);
 	}
 
 	async handleSSHCommand(text: string): Promise<void> {

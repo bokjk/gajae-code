@@ -42,16 +42,16 @@
 - The renderer shows a status line plus up to 5 collapsed tree items by default (`COLLAPSED_MATCH_LIMIT`), each with label, optional server name, score to 3 decimals, and truncated description. The ranked match list is not serialized into `content`.
 
 ## Flow
-1. `SearchToolBm25Tool.createIf()` in `packages/coding-agent/src/tools/search-tool-bm25.ts` exposes the tool only when `tools.discoveryMode !== "off"` or legacy `mcp.discoveryMode === true`, and only if the session implements the discovery hooks.
+1. `SearchToolBm25Tool.createIf()` in `packages/coding-agent/src/tools/search-tool-bm25.ts` exposes the tool only when `tools.discoveryMode !== "off"` and the session implements discovery hooks.
 2. `description` is rendered from `packages/coding-agent/src/prompts/tools/search-tool-bm25.md` via `renderSearchToolBm25Description()`, using the current discoverable-tool list plus per-server summary/count.
 3. `execute()` re-checks capability and settings:
    - missing discovery hooks -> `ToolError("Tool discovery is unavailable in this session.")`
    - discovery disabled -> `ToolError("Tool discovery is disabled. Enable tools.discoveryMode or mcp.discoveryMode to use search_tool_bm25.")`
 4. `query` is trimmed and validated; `limit` is defaulted/validated.
-5. `getDiscoverableToolSearchIndexForExecution()` fetches the cached generic search index from the session when available, otherwise falls back to the legacy MCP cache, otherwise rebuilds an index from the current discoverable-tool list.
+5. `getDiscoverableToolSearchIndexForExecution()` fetches the cached generic search index from the session when available, otherwise rebuilds an index from the current discoverable-tool list.
 6. `getSelectedToolNames()` reads the current discovered selections so already-selected tools can be excluded from fresh results.
 7. `searchDiscoverableTools()` in `packages/coding-agent/src/tool-discovery/tool-index.ts` tokenizes the query, scores every document with BM25, sorts by descending score then `tool.name`, and returns up to `searchIndex.documents.length` results; `execute()` then filters already-selected names and slices to `limit`.
-8. If any matches remain, `activateTools()` activates all matched tool names through `session.activateDiscoveredTools()` or legacy `activateDiscoveredMCPTools()`.
+8. If any matches remain, `activateTools()` activates all matched tool names through `session.activateDiscoveredTools()`.
 9. `details` is assembled from the activated names, current selected names, corpus size, and formatted matches; `content` is reduced to the compact JSON summary from `buildSearchToolBm25Content()`.
 10. `searchToolBm25Renderer` renders either:
    - the structured `details` view, or
@@ -59,12 +59,9 @@
 
 ## Modes / Variants
 - Discovery-mode gating:
-  - `tools.discoveryMode = "all"`: searches hidden discoverable built-ins plus hidden MCP tools.
-  - `tools.discoveryMode = "mcp-only"`: searches hidden MCP tools only.
-  - legacy `mcp.discoveryMode = true` with `tools.discoveryMode = "off"`: same as MCP-only.
+  - `tools.discoveryMode = "all"`: searches hidden discoverable built-ins.
 - Search-index source:
   - generic cached discoverable index from the session
-  - legacy cached MCP index, cast to the generic shape
   - rebuilt ad hoc from the current discoverable-tool list if neither cache path works
 - Activation backend:
   - generic `activateDiscoveredTools()`
@@ -72,7 +69,7 @@
 
 ## Side Effects
 - Session state
-  - Adds matched tools to the active session tool set through `activateDiscoveredTools()` / `activateDiscoveredMCPTools()`.
+  - Adds matched tools to the active session tool set through `activateDiscoveredTools()`.
   - Updates discovered-tool selection state so repeated searches accumulate selections instead of replacing them.
   - Invalidates the cached discoverable search index when newly activated built-ins change the hidden corpus (`packages/coding-agent/src/session/agent-session.ts`).
   - Tool availability changes before the next model call in the same turn; the prompt text says this explicitly.
@@ -108,10 +105,9 @@
 ## Notes
 - The tool wire name stays `search_tool_bm25` for persisted-session back-compat, even though the source file is `search-tool-bm25.ts`.
 - Corpus composition is session-dependent and excludes already-active tools:
-  - MCP entries come from `#discoverableMCPTools`, filtered to names not currently active, mapped with `summary = description`.
   - Built-in entries appear only in `"all"` mode and only for registry tools whose `loadMode === "discoverable"` and are not currently active.
-  - Hidden/internal built-ins are intentionally excluded from the built-in corpus: `resolve`, `yield`, `report_finding` are called out in the `#collectDiscoverableBuiltinTools()` comment.
-- `DiscoverableToolSource` includes `"extension"` and `"custom"`, but `AgentSession.getDiscoverableTools()` currently assembles only built-in and MCP sources.
+  - Hidden/internal built-ins are intentionally excluded from the built-in corpus: `resolve`, `yield`, `report_finding`, `report_tool_issue` are called out in the `#collectDiscoverableBuiltinTools()` comment.
+- `AgentSession.getDiscoverableTools()` currently assembles built-in discoverable tools.
 - On startup, `packages/coding-agent/src/sdk.ts` hides non-essential discoverable built-ins in `tools.discoveryMode = "all"`; defaults are `read`, `bash`, and `edit` unless `tools.essentialOverride` changes them.
 - Query tokenization is simple and deterministic: camelCase is split, non-alphanumerics become spaces, tokens are lowercased, and only non-empty alphanumeric tokens survive.
 - Scores are rounded differently by surface: `details.tools[].score` keeps 6 decimals; the TUI line renders 3.

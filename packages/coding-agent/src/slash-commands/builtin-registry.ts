@@ -1537,8 +1537,21 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	},
 ];
 
+const QUARANTINED_UTILITY_SLASH_COMMANDS = new Set([
+	"agents",
+	"extensions",
+	"marketplace",
+	"plugins",
+	"reload-plugins",
+	"ssh",
+]);
+
+const ACTIVE_BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = BUILTIN_SLASH_COMMAND_REGISTRY.filter(
+	command => !QUARANTINED_UTILITY_SLASH_COMMANDS.has(command.name),
+);
+
 const BUILTIN_SLASH_COMMAND_LOOKUP = new Map<string, SlashCommandSpec>();
-for (const command of BUILTIN_SLASH_COMMAND_REGISTRY) {
+for (const command of ACTIVE_BUILTIN_SLASH_COMMAND_REGISTRY) {
 	BUILTIN_SLASH_COMMAND_LOOKUP.set(command.name, command);
 	for (const alias of command.aliases ?? []) {
 		BUILTIN_SLASH_COMMAND_LOOKUP.set(alias, command);
@@ -1546,7 +1559,7 @@ for (const command of BUILTIN_SLASH_COMMAND_REGISTRY) {
 }
 
 /** Builtin command metadata used for slash-command autocomplete and help text. */
-export const BUILTIN_SLASH_COMMAND_DEFS: ReadonlyArray<BuiltinSlashCommand> = BUILTIN_SLASH_COMMAND_REGISTRY.map(
+export const BUILTIN_SLASH_COMMAND_DEFS: ReadonlyArray<BuiltinSlashCommand> = ACTIVE_BUILTIN_SLASH_COMMAND_REGISTRY.map(
 	command => ({
 		name: command.name,
 		description: command.description,
@@ -1560,7 +1573,7 @@ export const BUILTIN_SLASH_COMMAND_DEFS: ReadonlyArray<BuiltinSlashCommand> = BU
  * one of `handle` / `handleTui`. The TUI dispatcher prefers `handleTui`; the
  * ACP dispatcher requires `handle` and skips TUI-only entries.
  */
-export const BUILTIN_SLASH_COMMANDS_INTERNAL: ReadonlyArray<SlashCommandSpec> = BUILTIN_SLASH_COMMAND_REGISTRY;
+export const BUILTIN_SLASH_COMMANDS_INTERNAL: ReadonlyArray<SlashCommandSpec> = ACTIVE_BUILTIN_SLASH_COMMAND_REGISTRY;
 
 /**
  * Execute a builtin slash command in the interactive TUI.

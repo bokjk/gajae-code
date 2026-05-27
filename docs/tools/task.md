@@ -7,7 +7,7 @@
 - Model-facing prompt: `packages/coding-agent/src/prompts/tools/task.md`
 - Key collaborators:
   - `packages/coding-agent/src/task/types.ts` — dynamic schema, progress/result types, output caps.
-  - `packages/coding-agent/src/task/discovery.ts` — discover project/user/plugin/bundled agents.
+  - `packages/coding-agent/src/task/discovery.ts` — resolve bundled GJC agents.
   - `packages/coding-agent/src/task/agents.ts` — bundled agent definitions and frontmatter parsing.
   - `packages/coding-agent/src/task/executor.ts` — create child sessions, run subagents, collect output.
   - `packages/coding-agent/src/task/parallel.ts` — concurrency-limited scheduling and async semaphore.
@@ -141,8 +141,7 @@ Artifacts and side channels:
   - Patch mode — capture/apply root patches, keep patch artifacts when application fails.
   - Branch mode — commit each task onto `gjc/task/<id>` branch, cherry-pick into parent, preserve failed branches for manual resolution.
 - Agent source
-  - Project custom agents — nearest project config/plugin agent directories, first by source-family precedence.
-  - User custom agents — user config/plugin agent directories after project dirs of the same source family.
+  - Bundled GJC agents — retained four-agent surface.
   - Bundled agents — appended last from `packages/coding-agent/src/task/agents.ts`.
 - Bundled agent types
   - `explore` — read-only scout with structured handoff output.
@@ -161,7 +160,6 @@ Artifacts and side channels:
   - In branch mode creates temporary worktrees and task branches.
 - Network
   - Child sessions may use whichever networked tools/models their active tool set permits.
-  - MCP proxy tools can call existing parent MCP connections with a 60_000 ms timeout.
 - Subprocesses / native bindings
   - `fuse-overlayfs` and `fusermount`/`fusermount3` for FUSE isolation.
   - ProjFS native bindings via `@gajae-code/natives` on Windows.
@@ -185,7 +183,6 @@ Artifacts and side channels:
 - Progress coalescing in child execution: `PROGRESS_COALESCE_MS = 150` in `packages/coding-agent/src/task/executor.ts`.
 - Recent output tail for progress: `RECENT_OUTPUT_TAIL_BYTES = 8 * 1024` and `recentOutput` keeps the last 8 non-empty lines in `packages/coding-agent/src/task/executor.ts`.
 - Missing-`yield` reminder retries: `MAX_YIELD_RETRIES = 3` in `packages/coding-agent/src/task/executor.ts`.
-- MCP proxy timeout: `MCP_CALL_TIMEOUT_MS = 60_000` in `packages/coding-agent/src/task/executor.ts`.
 - Task id schema cap: `tasks[].id` `maxLength: 48` in `packages/coding-agent/src/task/types.ts`.
 - Prompt text says ids should be `≤32` chars, but the runtime schema allows 48; this mismatch is real.
 - Async/full sync parallelism both use `task.maxConcurrency` from settings:
@@ -211,12 +208,11 @@ Artifacts and side channels:
 - `agent://<id>` resolution errors are model-visible when another tool reads them: no session, no artifacts dir, missing id, conflicting extraction syntax, or invalid JSON for extraction.
 
 ## Notes
-- Agent discovery precedence is first-wins by exact name: project dirs before user dirs within a source family, plugin agent dirs after config dirs, bundled agents last. See `packages/coding-agent/src/task/discovery.ts` and `docs/task-agent-discovery.md`.
+- Bundled agent definitions are embedded in `packages/coding-agent/src/task/agents.ts`.
 - `TaskTool.create(...)` caches discovered agents only for description rendering and the async blocking-agent decision. `#executeSync(...)` rediscovers agents each call.
 - Custom agent frontmatter can override bundled agents by name. Bundled definitions are embedded at build time in `packages/coding-agent/src/task/agents.ts`.
-- Child sessions do not inherit conversation history automatically. The only built-in carry-over is shared `context`, optional `context.md`, workspace tree/skills/context files, and shared `local://` root.
+- Child sessions do not inherit conversation history automatically. The only built-in carry-over is shared `context`, optional `context.md`, workspace tree/context files, and shared `local://` root.
 - `Settings.isolated(...)` gives each child a session-isolated settings snapshot; tool enablement is recomputed inside the child session rather than sharing mutable parent tool state.
-- When the parent passes `mcpManager`, child sessions disable standalone MCP discovery and instead get proxy tools that reuse the parent connections.
 - Plan mode mutates an `effectiveAgent` with a read-only tool subset and plan-mode prompt text, but `runSubprocess(...)` is still invoked with `agent` rather than `effectiveAgent`. Model/thinking/schema overrides use the effective agent; prompt/tool/spawn restrictions do not fully flow through this call path.
 - Branch-mode merge temporarily stashes the parent repo before cherry-picking task branches. A stash-pop conflict is treated as merge failure and leaves recovery state behind.
 - Patch-mode only applies combined root patches if every successful task produced a patch and `git.patch.canApplyText(...)` succeeds.

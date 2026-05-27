@@ -24,7 +24,6 @@ GJC merges LSP config from multiple files, lowest to highest priority:
 | Priority | Location |
 |----------|----------|
 | 5 (lowest) | `~/lsp.json`, `~/.lsp.json`, `~/lsp.yaml`, `~/.lsp.yaml` |
-| 4 | Plugin LSP configs (marketplace / `--plugin-dir` roots) |
 | 3 | `~/.gjc/agent/lsp.json`, `~/.gjc/agent/lsp.yaml`, `~/.claude/lsp.*` |
 | 2 | `<project>/.gjc/lsp.json`, `<project>/.gjc/lsp.yaml`, `<project>/.claude/lsp.*` |
 | 1 (highest) | `<project>/lsp.json`, `<project>/.lsp.json`, `<project>/lsp.yaml` |

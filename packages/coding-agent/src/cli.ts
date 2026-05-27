@@ -37,22 +37,6 @@ const commands: CommandEntry[] = [
 	{ name: "ralplan", load: () => import("./commands/ralplan").then(m => m.default) },
 	{ name: "deep-interview", load: () => import("./commands/deep-interview").then(m => m.default) },
 	{ name: "launch", load: () => import("./commands/launch").then(m => m.default) },
-	{ name: "acp", load: () => import("./commands/acp").then(m => m.default) },
-	{ name: "auth-broker", load: () => import("./commands/auth-broker").then(m => m.default) },
-	{ name: "auth-gateway", load: () => import("./commands/auth-gateway").then(m => m.default) },
-	{ name: "agents", load: () => import("./commands/agents").then(m => m.default) },
-	{ name: "commit", load: () => import("./commands/commit").then(m => m.default) },
-	{ name: "config", load: () => import("./commands/config").then(m => m.default) },
-	{ name: "grep", load: () => import("./commands/grep").then(m => m.default) },
-	{ name: "plugin", load: () => import("./commands/plugin").then(m => m.default) },
-	{ name: "setup", load: () => import("./commands/setup").then(m => m.default) },
-	{ name: "shell", load: () => import("./commands/shell").then(m => m.default) },
-	{ name: "read", load: () => import("./commands/read").then(m => m.default) },
-	{ name: "ssh", load: () => import("./commands/ssh").then(m => m.default) },
-	{ name: "stats", load: () => import("./commands/stats").then(m => m.default) },
-	{ name: "update", load: () => import("./commands/update").then(m => m.default) },
-	{ name: "worktree", load: () => import("./commands/worktree").then(m => m.default), aliases: ["wt"] },
-	{ name: "search", load: () => import("./commands/web-search").then(m => m.default), aliases: ["q"] },
 ];
 
 async function showHelp(config: CliConfig): Promise<void> {

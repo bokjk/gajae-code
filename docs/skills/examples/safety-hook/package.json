@@ -1,8 +1,0 @@
-{
-  "name": "safety-hook",
-  "version": "1.0.0",
-  "description": "gajae-code extension example: block rm -rf / via tool_call hook",
-  "gjc": {
-    "extensions": ["./index.ts"]
-  }
-}

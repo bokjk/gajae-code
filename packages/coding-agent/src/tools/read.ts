@@ -1477,7 +1477,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			return executeReadUrl(this.session, { path: parsedUrlTarget.path, raw: parsedUrlTarget.raw }, signal);
 		}
 
-		// Handle internal URLs (agent://, artifact://, memory://, skill://, rule://, local://, mcp://, gjc://, issue://, pr://).
+		// Handle internal URLs (agent://, artifact://, memory://, rule://, local://, gjc://, issue://, pr://).
 		// Use the internal-URL-aware splitter so malformed selectors are peeled
 		// off the URL and surfaced via parseSel rather than confusing handlers.
 		const internalRouter = InternalUrlRouter.instance();
@@ -2010,7 +2010,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 	}
 
 	/**
-	 * Handle internal URLs (agent://, artifact://, memory://, skill://, rule://, local://, mcp://).
+	 * Handle internal URLs (agent://, artifact://, memory://, rule://, local://).
 	 * Supports pagination via offset/limit but rejects them when query extraction is used.
 	 */
 	async #handleInternalUrl(
@@ -2265,7 +2265,7 @@ export const readToolRenderer = {
 		const suffix = details?.suffixResolution;
 		const plainDisplayPath = suffix ? shortenPath(suffix.to) : filePath;
 		// resolvedPath is the absolute fs path for fs-backed reads (regular files plus
-		// local:// / memory:// / skill:// / artifact:// resources). Fall back to a sync
+		// local:// / memory:// / artifact:// resources). Fall back to a sync
 		// resolver for fs-backed internal URLs so the title is clickable even before the
 		// result lands or if the handler didn't populate resolvedPath.
 		const absForLink = details?.resolvedPath ?? tryResolveInternalUrlSync(rawPath);
