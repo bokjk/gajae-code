@@ -228,6 +228,8 @@ export function getExtraHelpText(): string {
   GJC_SLOW_MODEL              - Override slow/reasoning model (see --slow)
   GJC_PLAN_MODEL              - Override planning model (see --plan)
   GJC_NO_PTY                  - Disable PTY-based interactive bash execution
+  GJC_LAUNCH_POLICY           - Launch policy for interactive startup: auto, tmux, or direct
+  GJC_TMUX_SESSION            - tmux session name for default interactive startup (default: gajae_code)
 
   For complete environment variable reference, see:
   ${chalk.dim("docs/environment-variables.md")}

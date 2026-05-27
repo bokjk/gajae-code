@@ -6,6 +6,7 @@ import { THINKING_EFFORTS } from "@gajae-code/ai";
 import { APP_NAME } from "@gajae-code/utils";
 import { Args, Command, Flags } from "@gajae-code/utils/cli";
 import { parseArgs } from "../cli/args";
+import { launchDefaultTmuxIfNeeded } from "../gjc-runtime/launch-tmux";
 import { runRootCommand } from "../main";
 import { prepareAcpTerminalAuthArgs } from "../modes/acp/terminal-auth";
 
@@ -138,6 +139,7 @@ export default class Index extends Command {
 	async run(): Promise<void> {
 		const { args } = prepareAcpTerminalAuthArgs(this.argv);
 		const parsed = parseArgs(args);
+		if (launchDefaultTmuxIfNeeded({ parsed, rawArgs: args })) return;
 		await runRootCommand(parsed, args);
 	}
 }
