@@ -11,7 +11,7 @@ import { GoalTool } from "../goals/tools/goal-tool";
 import type { HindsightSessionState } from "../hindsight/state";
 import { LspTool } from "../lsp";
 import type { PlanModeState } from "../plan-mode/state";
-import { type AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
+import type { AgentRegistry } from "../registry/agent-registry";
 import type { ArtifactManager } from "../session/artifacts";
 import type { ClientBridge } from "../session/client-bridge";
 import type { CustomMessage } from "../session/messages";
@@ -460,9 +460,8 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 		if (name === "checkpoint" || name === "rewind") return session.settings.get("checkpoint.enabled");
 		if (name === "irc") {
 			if (!session.settings.get("irc.enabled")) return false;
-			// Main agent only needs `irc` when subagents may run concurrently (async).
-			// In sync mode main blocks on `task`, so peer messaging from main is dead weight.
-			if (!session.settings.get("async.enabled") && session.getAgentId?.() === MAIN_AGENT_ID) return false;
+			// Task subagents now detach regardless of async.enabled, so the main agent
+			// may need IRC coordination whenever IRC itself is enabled.
 			return true;
 		}
 		if (name === "recipe") return session.settings.get("recipe.enabled");

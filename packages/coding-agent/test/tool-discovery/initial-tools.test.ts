@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { Settings } from "../../src/config/settings";
+import { AgentRegistry, MAIN_AGENT_ID } from "../../src/registry/agent-registry";
 import type { ToolSession } from "../../src/tools/index";
 import {
 	AskTool,
@@ -76,6 +77,19 @@ describe("BUILTIN_TOOLS public factory map", () => {
 
 		expect(tools.some(tool => tool.name === "job")).toBe(true);
 		expect(tools.some(tool => tool.name === "subagent")).toBe(true);
+	});
+
+	it("keeps IRC available for main-agent coordination when detached subagents run with async disabled", async () => {
+		const session = {
+			...toolSession,
+			agentRegistry: new AgentRegistry(),
+			getAgentId: () => MAIN_AGENT_ID,
+			settings: Settings.isolated({ "async.enabled": false, "irc.enabled": true }),
+		};
+
+		const tools = await createTools(session, ["irc"]);
+
+		expect(tools.some(tool => tool.name === "irc")).toBe(true);
 	});
 });
 
