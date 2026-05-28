@@ -121,6 +121,16 @@ describe("ModelRegistry", () => {
 		};
 	}
 
+	function unsetEnvForTest(key: string): () => void {
+		const previous = Bun.env[key];
+		delete Bun.env[key];
+		return () => {
+			if (previous !== undefined) {
+				Bun.env[key] = previous;
+			}
+		};
+	}
+
 	function mockOpenAiCompatibleModels(url: string, modelIds: string[]) {
 		return hookFetch(input => {
 			const requestUrl = String(input);
@@ -154,6 +164,19 @@ describe("ModelRegistry", () => {
 	}
 
 	describe("provider base URL environment variables", () => {
+		test("does not bake the public OpenAI API URL into bundled OpenAI models", () => {
+			const restore = unsetEnvForTest("OPENAI_BASE_URL");
+			try {
+				const registry = new ModelRegistry(authStorage, modelsJsonPath);
+				const openaiModels = getModelsForProvider(registry, "openai");
+
+				expect(openaiModels.length).toBeGreaterThan(0);
+				expect(openaiModels.some(model => model.baseUrl.includes("api.openai.com"))).toBe(false);
+			} finally {
+				restore();
+			}
+		});
+
 		test("uses OPENAI_BASE_URL for bundled OpenAI models when models config has no baseUrl override", () => {
 			const restore = setEnvForTest("OPENAI_BASE_URL", "https://openai-proxy.example.com/v1");
 			try {
@@ -163,6 +186,20 @@ describe("ModelRegistry", () => {
 				expect(openaiModels.length).toBeGreaterThan(0);
 				expect(openaiModels.every(model => model.baseUrl === "https://openai-proxy.example.com/v1")).toBe(true);
 				expect(registry.getProviderBaseUrl("openai")).toBe("https://openai-proxy.example.com/v1");
+			} finally {
+				restore();
+			}
+		});
+
+		test("does not apply OPENAI_BASE_URL to OpenAI Codex models", () => {
+			const restore = setEnvForTest("OPENAI_BASE_URL", "https://openai-proxy.example.com/v1");
+			try {
+				const registry = new ModelRegistry(authStorage, modelsJsonPath);
+				const codexModels = getModelsForProvider(registry, "openai-codex");
+
+				expect(codexModels.length).toBeGreaterThan(0);
+				expect(codexModels.every(model => model.baseUrl !== "https://openai-proxy.example.com/v1")).toBe(true);
+				expect(registry.getProviderBaseUrl("openai-codex")).not.toBe("https://openai-proxy.example.com/v1");
 			} finally {
 				restore();
 			}
@@ -581,6 +618,27 @@ describe("ModelRegistry", () => {
 				else Bun.env.OPENAI_API_KEY = originalOpenAiKey;
 			}
 		});
+
+		test("OPENAI_API_KEY supplies env auth for bundled OpenAI models only", async () => {
+			const restoreOpenAiKey = setEnvForTest("OPENAI_API_KEY", "env-openai-key");
+			const restoreCodexToken = unsetEnvForTest("OPENAI_CODEX_OAUTH_TOKEN");
+			try {
+				const registry = new ModelRegistry(authStorage, modelsJsonPath);
+				const openaiModels = getModelsForProvider(registry, "openai");
+				const codexModels = getModelsForProvider(registry, "openai-codex");
+
+				expect(openaiModels.length).toBeGreaterThan(0);
+				expect(codexModels.length).toBeGreaterThan(0);
+				expect(registry.getAvailable().some(model => model.provider === "openai")).toBe(true);
+				expect(registry.getAvailable().some(model => model.provider === "openai-codex")).toBe(false);
+				await expect(registry.getApiKey(openaiModels[0])).resolves.toBe("env-openai-key");
+				await expect(registry.getApiKey(codexModels[0])).resolves.toBeUndefined();
+			} finally {
+				restoreCodexToken();
+				restoreOpenAiKey();
+			}
+		});
+
 		test("baseUrl-only override does not affect other providers", () => {
 			writeRawModelsJson({
 				anthropic: overrideConfig("https://my-proxy.example.com/v1"),

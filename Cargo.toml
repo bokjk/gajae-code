@@ -7,8 +7,8 @@ resolver = "3"
 version = "0.1.2"
 edition = "2024"
 license = "MIT"
-authors = ["Can Boluk"]
-homepage = "https://gajae-code.dev/"
+authors = ["Yeachan-Heo"]
+homepage = "https://gaebal-gajae.dev/"
 repository = "https://github.com/can1357/gajae-code"
 
 [patch.crates-io]

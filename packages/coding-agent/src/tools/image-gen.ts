@@ -701,11 +701,15 @@ function getOpenAIResponseErrorMessage(rawText: string): string {
 }
 
 function getOpenAIBaseUrl(model: Model): string {
-	const fallback =
-		model.api === "openai-codex-responses" || model.provider === "openai-codex"
-			? CODEX_BASE_URL
-			: DEFAULT_OPENAI_BASE_URL;
-	return (model.baseUrl || fallback).replace(/\/+$/, "");
+	if (model.api === "openai-codex-responses" || model.provider === "openai-codex") {
+		return (model.baseUrl || CODEX_BASE_URL).replace(/\/+$/, "");
+	}
+	const envBaseUrl = $env.OPENAI_BASE_URL?.trim();
+	const configuredBaseUrl = model.baseUrl?.trim();
+	if (envBaseUrl && (!configuredBaseUrl || configuredBaseUrl.toLowerCase().includes("api.openai.com"))) {
+		return envBaseUrl.replace(/\/+$/, "");
+	}
+	return (configuredBaseUrl || envBaseUrl || DEFAULT_OPENAI_BASE_URL).replace(/\/+$/, "");
 }
 
 function getOpenAIResponsesUrl(model: Model): string {
@@ -1075,7 +1079,7 @@ export const imageGenTool: CustomTool<typeof imageGenSchema, ImageGenToolDetails
 					headers: {
 						"Content-Type": "application/json",
 						Authorization: `Bearer ${apiKey.apiKey}`,
-						"HTTP-Referer": "https://gajae-code.dev/",
+						"HTTP-Referer": "https://gaebal-gajae.dev/",
 						"X-OpenRouter-Title": "Gajae Code",
 						"X-OpenRouter-Categories": "cli-agent",
 					},

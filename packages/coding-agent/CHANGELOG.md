@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-05-28
+
+### Changed
+
+- Updated package metadata for the Gajae Code npm publication.
+
 ### Fixed
 
 - Fixed slash-command autocomplete so skill command matches no longer hide built-in fuzzy candidates like `/model` while typing `/mode`.
@@ -12,7 +18,6 @@
 
 - Restored `gjc team` multi-worker GJC-team parity orchestration with current-window worker panes, GJC-scoped state/API semantics, and `N:agent-type` launches.
 - Ported GJC team worker-worktree integration parity so `status`/`resume` auto-checkpoint dirty workers, merge or cherry-pick worker commits, cross-rebase idle workers, and record conflicts under `.gjc` integration artifacts.
-- Restored `gjc team` multi-worker OMX-parity orchestration with current-window worker panes, GJC-scoped state/API semantics, and `N:agent-type` launches.
 
 ### Added
 

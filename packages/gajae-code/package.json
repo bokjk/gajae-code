@@ -3,8 +3,8 @@
 	"name": "gajae-code",
 	"version": "0.1.2",
 	"description": "One-line npm install wrapper for the Gajae-Code gjc CLI",
-	"homepage": "https://gajae-code.dev",
-	"author": "Can Boluk",
+	"homepage": "https://gaebal-gajae.dev",
+	"author": "Yeachan-Heo",
 	"contributors": [
 		"Mario Zechner"
 	],

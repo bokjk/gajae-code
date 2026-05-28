@@ -70,6 +70,17 @@ import { createInitialResponsesAssistantMessage } from "./openai-responses-share
 import { transformMessages } from "./transform-messages";
 import { joinTextWithImagePlaceholder, NON_VISION_IMAGE_PLACEHOLDER } from "./vision-guard";
 
+const OPENAI_DEFAULT_BASE_URL = "https://api.openai.com/v1";
+
+function resolveOpenAIProviderBaseUrl(baseUrl: string | undefined): string {
+	const envBaseUrl = $env.OPENAI_BASE_URL?.trim();
+	const configuredBaseUrl = baseUrl?.trim();
+	if (envBaseUrl && (!configuredBaseUrl || configuredBaseUrl.toLowerCase().includes("api.openai.com"))) {
+		return envBaseUrl;
+	}
+	return configuredBaseUrl || envBaseUrl || OPENAI_DEFAULT_BASE_URL;
+}
+
 /**
  * Normalize tool call ID for Mistral.
  * Mistral requires tool IDs to be exactly 9 alphanumeric characters (a-z, A-Z, 0-9).
@@ -916,7 +927,7 @@ async function createClient(
 		// SDK UA so traffic is identifiable in upstream provider logs.
 		// https://openrouter.ai/docs/app-attribution
 		headers["User-Agent"] = `Gajae-Code/${packageJson.version}`;
-		headers["HTTP-Referer"] = "https://gajae-code.dev/";
+		headers["HTTP-Referer"] = "https://gaebal-gajae.dev/";
 		headers["X-OpenRouter-Title"] = "Gajae-Code";
 		headers["X-OpenRouter-Categories"] = "cli-agent";
 		// Always-on response caching: identical requests return cached responses for free.
@@ -931,7 +942,7 @@ async function createClient(
 	}
 	let copilotPremiumRequests: number | undefined;
 
-	let baseUrl = model.baseUrl;
+	let baseUrl = model.provider === "openai" ? resolveOpenAIProviderBaseUrl(model.baseUrl) : model.baseUrl;
 	if (model.provider === "github-copilot") {
 		apiKey = parseGitHubCopilotApiKey(rawApiKey).accessToken;
 		const hasImages = hasCopilotVisionInput(context.messages);

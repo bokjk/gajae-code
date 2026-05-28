@@ -3,8 +3,8 @@
 	"name": "@gajae-code/swarm-extension",
 	"version": "0.1.2",
 	"description": "Swarm orchestration extension for gjc",
-	"homepage": "https://gajae-code.dev",
-	"author": "Derek Rynd",
+	"homepage": "https://gaebal-gajae.dev",
+	"author": "Yeachan-Heo",
 	"license": "MIT",
 	"repository": {
 		"type": "git",

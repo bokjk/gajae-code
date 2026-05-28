@@ -356,7 +356,7 @@ async function generateModels() {
 	for (const models of Object.values(prevModelsJson as Record<string, Record<string, Model>>)) {
 		for (const model of Object.values(models)) {
 			if (!fetchedKeys.has(`${model.provider}/${model.id}`) && !discoveryOnlyProviders.has(model.provider)) {
-				allModels.push(model);
+				allModels.push(model.provider === "openai" ? { ...model, baseUrl: "" } : model);
 			}
 		}
 	}

@@ -8452,7 +8452,7 @@
 			"cost": {
 				"input": 1,
 				"output": 3,
-				"cacheRead": 0,
+				"cacheRead": 0.5,
 				"cacheWrite": 0
 			},
 			"contextWindow": 262144,
@@ -8471,7 +8471,7 @@
 			"cost": {
 				"input": 0.15,
 				"output": 0.6,
-				"cacheRead": 0,
+				"cacheRead": 0.075,
 				"cacheWrite": 0
 			},
 			"contextWindow": 131072,
@@ -8495,7 +8495,7 @@
 			"cost": {
 				"input": 0.075,
 				"output": 0.3,
-				"cacheRead": 0,
+				"cacheRead": 0.0375,
 				"cacheWrite": 0
 			},
 			"contextWindow": 131072,
@@ -12860,6 +12860,25 @@
 				"minLevel": "minimal",
 				"maxLevel": "xhigh"
 			}
+		},
+		"moonshotai/kimi-k2.6:free": {
+			"id": "moonshotai/kimi-k2.6:free",
+			"name": "MoonshotAI: Kimi K2.6 (free)",
+			"api": "openai-completions",
+			"provider": "kilo",
+			"baseUrl": "https://api.kilo.ai/api/gateway",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 222222,
+			"maxTokens": 8888
 		},
 		"morph-warp-grep-v2": {
 			"id": "morph-warp-grep-v2",
@@ -51146,7 +51165,7 @@
 			"name": "OpenAI code Mini",
 			"api": "openai-responses",
 			"provider": "openai",
-			"baseUrl": "https://api.openai.com/v1",
+			"baseUrl": "",
 			"reasoning": true,
 			"input": [
 				"text"
@@ -51170,7 +51189,7 @@
 			"name": "GPT-4",
 			"api": "openai-responses",
 			"provider": "openai",
-			"baseUrl": "https://api.openai.com/v1",
+			"baseUrl": "",
 			"reasoning": false,
 			"input": [
 				"text"
@@ -51189,7 +51208,7 @@
 			"name": "GPT-4 Turbo",
 			"api": "openai-responses",
 			"provider": "openai",
-			"baseUrl": "https://api.openai.com/v1",
+			"baseUrl": "",
 			"reasoning": false,
 			"input": [
 				"text",
@@ -51209,7 +51228,7 @@
 			"name": "GPT-4.1",
 			"api": "openai-responses",
 			"provider": "openai",
-			"baseUrl": "https://api.openai.com/v1",
+			"baseUrl": "",
 			"reasoning": false,
 			"input": [
 				"text",
@@ -51229,7 +51248,7 @@
 			"name": "GPT-4.1 mini",
 			"api": "openai-responses",
 			"provider": "openai",
-			"baseUrl": "https://api.openai.com/v1",
+			"baseUrl": "",
 			"reasoning": false,
 			"input": [
 				"text",
@@ -51249,7 +51268,7 @@
 			"name": "GPT-4.1 nano",
 			"api": "openai-responses",
 			"provider": "openai",
-			"baseUrl": "https://api.openai.com/v1",
+			"baseUrl": "",
 			"reasoning": false,
 			"input": [
 				"text",
@@ -51269,7 +51288,7 @@
 			"name": "GPT-4o",
 			"api": "openai-responses",
 			"provider": "openai",
-			"baseUrl": "https://api.openai.com/v1",
+			"baseUrl": "",
 			"reasoning": false,
 			"input": [
 				"text",
@@ -51289,7 +51308,7 @@
 			"name": "GPT-4o (2024-05-13)",
 			"api": "openai-responses",
 			"provider": "openai",
-			"baseUrl": "https://api.openai.com/v1",
+			"baseUrl": "",
 			"reasoning": false,
 			"input": [
 				"text",
@@ -51309,7 +51328,7 @@
 			"name": "GPT-4o (2024-08-06)",
 			"api": "openai-responses",
 			"provider": "openai",
-			"baseUrl": "https://api.openai.com/v1",
+			"baseUrl": "",
 			"reasoning": false,
 			"input": [
 				"text",
@@ -51329,7 +51348,7 @@
 			"name": "GPT-4o (2024-11-20)",
 			"api": "openai-responses",
 			"provider": "openai",
-			"baseUrl": "https://api.openai.com/v1",
+			"baseUrl": "",
 			"reasoning": false,
 			"input": [
 				"text",
@@ -51349,7 +51368,7 @@
 			"name": "GPT-4o mini",
 			"api": "openai-responses",
 			"provider": "openai",
-			"baseUrl": "https://api.openai.com/v1",
+			"baseUrl": "",
 			"reasoning": false,
 			"input": [
 				"text",
@@ -51369,7 +51388,7 @@
 			"name": "GPT-5",
 			"api": "openai-responses",
 			"provider": "openai",
-			"baseUrl": "https://api.openai.com/v1",
+			"baseUrl": "",
 			"reasoning": true,
 			"input": [
 				"text",
@@ -51394,7 +51413,7 @@
 			"id": "gpt-5-chat-latest",
 			"name": "GPT-5 Chat Latest",
 			"api": "openai-responses",
-			"baseUrl": "https://api.openai.com/v1",
+			"baseUrl": "",
 			"provider": "openai",
 			"reasoning": false,
 			"input": [
@@ -51416,7 +51435,7 @@
 			"name": "GPT-5-OpenAI code",
 			"api": "openai-responses",
 			"provider": "openai",
-			"baseUrl": "https://api.openai.com/v1",
+			"baseUrl": "",
 			"reasoning": true,
 			"input": [
 				"text",
@@ -51442,7 +51461,7 @@
 			"name": "GPT-5 Mini",
 			"api": "openai-responses",
 			"provider": "openai",
-			"baseUrl": "https://api.openai.com/v1",
+			"baseUrl": "",
 			"reasoning": true,
 			"input": [
 				"text",
@@ -51468,7 +51487,7 @@
 			"name": "GPT-5 Nano",
 			"api": "openai-responses",
 			"provider": "openai",
-			"baseUrl": "https://api.openai.com/v1",
+			"baseUrl": "",
 			"reasoning": true,
 			"input": [
 				"text",
@@ -51494,7 +51513,7 @@
 			"name": "GPT-5 Pro",
 			"api": "openai-responses",
 			"provider": "openai",
-			"baseUrl": "https://api.openai.com/v1",
+			"baseUrl": "",
 			"reasoning": true,
 			"input": [
 				"text",
@@ -51520,7 +51539,7 @@
 			"name": "GPT-5.1",
 			"api": "openai-responses",
 			"provider": "openai",
-			"baseUrl": "https://api.openai.com/v1",
+			"baseUrl": "",
 			"reasoning": true,
 			"input": [
 				"text",
@@ -51546,7 +51565,7 @@
 			"name": "GPT-5.1 Chat",
 			"api": "openai-responses",
 			"provider": "openai",
-			"baseUrl": "https://api.openai.com/v1",
+			"baseUrl": "",
 			"reasoning": true,
 			"input": [
 				"text",
@@ -51572,7 +51591,7 @@
 			"name": "GPT-5.1 OpenAI code",
 			"api": "openai-responses",
 			"provider": "openai",
-			"baseUrl": "https://api.openai.com/v1",
+			"baseUrl": "",
 			"reasoning": true,
 			"input": [
 				"text",
@@ -51598,7 +51617,7 @@
 			"name": "GPT-5.1 OpenAI code Max",
 			"api": "openai-responses",
 			"provider": "openai",
-			"baseUrl": "https://api.openai.com/v1",
+			"baseUrl": "",
 			"reasoning": true,
 			"input": [
 				"text",
@@ -51624,7 +51643,7 @@
 			"name": "GPT-5.1 OpenAI code mini",
 			"api": "openai-responses",
 			"provider": "openai",
-			"baseUrl": "https://api.openai.com/v1",
+			"baseUrl": "",
 			"reasoning": true,
 			"input": [
 				"text",
@@ -51650,7 +51669,7 @@
 			"name": "GPT-5.2",
 			"api": "openai-responses",
 			"provider": "openai",
-			"baseUrl": "https://api.openai.com/v1",
+			"baseUrl": "",
 			"reasoning": true,
 			"input": [
 				"text",
@@ -51676,7 +51695,7 @@
 			"name": "GPT-5.2 Chat",
 			"api": "openai-responses",
 			"provider": "openai",
-			"baseUrl": "https://api.openai.com/v1",
+			"baseUrl": "",
 			"reasoning": true,
 			"input": [
 				"text",
@@ -51702,7 +51721,7 @@
 			"name": "GPT-5.2 OpenAI code",
 			"api": "openai-responses",
 			"provider": "openai",
-			"baseUrl": "https://api.openai.com/v1",
+			"baseUrl": "",
 			"reasoning": true,
 			"input": [
 				"text",
@@ -51728,7 +51747,7 @@
 			"name": "GPT-5.2 Pro",
 			"api": "openai-responses",
 			"provider": "openai",
-			"baseUrl": "https://api.openai.com/v1",
+			"baseUrl": "",
 			"reasoning": true,
 			"input": [
 				"text",
@@ -51754,7 +51773,7 @@
 			"name": "GPT-5.3 Chat (latest)",
 			"api": "openai-responses",
 			"provider": "openai",
-			"baseUrl": "https://api.openai.com/v1",
+			"baseUrl": "",
 			"reasoning": false,
 			"input": [
 				"text",
@@ -51775,7 +51794,7 @@
 			"name": "GPT-5.3 OpenAI code",
 			"api": "openai-responses",
 			"provider": "openai",
-			"baseUrl": "https://api.openai.com/v1",
+			"baseUrl": "",
 			"reasoning": true,
 			"input": [
 				"text",
@@ -51801,7 +51820,7 @@
 			"name": "GPT-5.3 OpenAI code Spark",
 			"api": "openai-responses",
 			"provider": "openai",
-			"baseUrl": "https://api.openai.com/v1",
+			"baseUrl": "",
 			"reasoning": true,
 			"input": [
 				"text",
@@ -51828,7 +51847,7 @@
 			"name": "GPT-5.4",
 			"api": "openai-responses",
 			"provider": "openai",
-			"baseUrl": "https://api.openai.com/v1",
+			"baseUrl": "",
 			"reasoning": true,
 			"input": [
 				"text",
@@ -51854,7 +51873,7 @@
 			"name": "GPT-5.4 mini",
 			"api": "openai-responses",
 			"provider": "openai",
-			"baseUrl": "https://api.openai.com/v1",
+			"baseUrl": "",
 			"reasoning": true,
 			"input": [
 				"text",
@@ -51880,7 +51899,7 @@
 			"name": "GPT-5.4 nano",
 			"api": "openai-responses",
 			"provider": "openai",
-			"baseUrl": "https://api.openai.com/v1",
+			"baseUrl": "",
 			"reasoning": true,
 			"input": [
 				"text",
@@ -51906,7 +51925,7 @@
 			"name": "GPT-5.4 Pro",
 			"api": "openai-responses",
 			"provider": "openai",
-			"baseUrl": "https://api.openai.com/v1",
+			"baseUrl": "",
 			"reasoning": true,
 			"input": [
 				"text",
@@ -51932,7 +51951,7 @@
 			"name": "GPT-5.5",
 			"api": "openai-responses",
 			"provider": "openai",
-			"baseUrl": "https://api.openai.com/v1",
+			"baseUrl": "",
 			"reasoning": true,
 			"input": [
 				"text",
@@ -51959,7 +51978,7 @@
 			"name": "GPT-5.5 Pro",
 			"api": "openai-responses",
 			"provider": "openai",
-			"baseUrl": "https://api.openai.com/v1",
+			"baseUrl": "",
 			"reasoning": true,
 			"input": [
 				"text",
@@ -51986,7 +52005,7 @@
 			"name": "o1",
 			"api": "openai-responses",
 			"provider": "openai",
-			"baseUrl": "https://api.openai.com/v1",
+			"baseUrl": "",
 			"reasoning": true,
 			"input": [
 				"text",
@@ -52011,7 +52030,7 @@
 			"name": "o1-pro",
 			"api": "openai-responses",
 			"provider": "openai",
-			"baseUrl": "https://api.openai.com/v1",
+			"baseUrl": "",
 			"reasoning": true,
 			"input": [
 				"text",
@@ -52036,7 +52055,7 @@
 			"name": "o3",
 			"api": "openai-responses",
 			"provider": "openai",
-			"baseUrl": "https://api.openai.com/v1",
+			"baseUrl": "",
 			"reasoning": true,
 			"input": [
 				"text",
@@ -52061,7 +52080,7 @@
 			"name": "o3-deep-research",
 			"api": "openai-responses",
 			"provider": "openai",
-			"baseUrl": "https://api.openai.com/v1",
+			"baseUrl": "",
 			"reasoning": true,
 			"input": [
 				"text",
@@ -52086,7 +52105,7 @@
 			"name": "o3-mini",
 			"api": "openai-responses",
 			"provider": "openai",
-			"baseUrl": "https://api.openai.com/v1",
+			"baseUrl": "",
 			"reasoning": true,
 			"input": [
 				"text"
@@ -52110,7 +52129,7 @@
 			"name": "o3-pro",
 			"api": "openai-responses",
 			"provider": "openai",
-			"baseUrl": "https://api.openai.com/v1",
+			"baseUrl": "",
 			"reasoning": true,
 			"input": [
 				"text",
@@ -52135,7 +52154,7 @@
 			"name": "o4-mini",
 			"api": "openai-responses",
 			"provider": "openai",
-			"baseUrl": "https://api.openai.com/v1",
+			"baseUrl": "",
 			"reasoning": true,
 			"input": [
 				"text",
@@ -52160,7 +52179,7 @@
 			"name": "o4-mini-deep-research",
 			"api": "openai-responses",
 			"provider": "openai",
-			"baseUrl": "https://api.openai.com/v1",
+			"baseUrl": "",
 			"reasoning": true,
 			"input": [
 				"text",
@@ -52973,9 +52992,9 @@
 				"image"
 			],
 			"cost": {
-				"input": 0.4,
-				"output": 2,
-				"cacheRead": 0.08,
+				"input": 0.14,
+				"output": 0.28,
+				"cacheRead": 0.0028,
 				"cacheWrite": 0
 			},
 			"contextWindow": 1000000,
@@ -52997,9 +53016,9 @@
 				"text"
 			],
 			"cost": {
-				"input": 1,
-				"output": 3,
-				"cacheRead": 0.2,
+				"input": 1.74,
+				"output": 3.48,
+				"cacheRead": 0.0145,
 				"cacheWrite": 0
 			},
 			"contextWindow": 1048576,
@@ -54261,6 +54280,31 @@
 			},
 			"contextWindow": 1048576,
 			"maxTokens": 64000,
+			"thinking": {
+				"mode": "effort",
+				"minLevel": "minimal",
+				"maxLevel": "xhigh"
+			}
+		},
+		"mimo-v2.5-free": {
+			"id": "mimo-v2.5-free",
+			"name": "MiMo V2.5 Free",
+			"api": "openai-completions",
+			"provider": "opencode-zen",
+			"baseUrl": "https://opencode.ai/zen/v1",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 1000000,
+			"maxTokens": 128000,
 			"thinking": {
 				"mode": "effort",
 				"minLevel": "minimal",
@@ -57044,7 +57088,7 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": 204800,
+			"contextWindow": 262144,
 			"maxTokens": 8192,
 			"compat": {
 				"supportsToolChoice": false
@@ -57720,6 +57764,31 @@
 			},
 			"contextWindow": 262144,
 			"maxTokens": 262142,
+			"thinking": {
+				"mode": "effort",
+				"minLevel": "minimal",
+				"maxLevel": "high"
+			}
+		},
+		"moonshotai/kimi-k2.6:free": {
+			"id": "moonshotai/kimi-k2.6:free",
+			"name": "MoonshotAI: Kimi K2.6 (free)",
+			"api": "openai-completions",
+			"provider": "openrouter",
+			"baseUrl": "https://openrouter.ai/api/v1",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 262144,
+			"maxTokens": 8888,
 			"thinking": {
 				"mode": "effort",
 				"minLevel": "minimal",
@@ -58616,11 +58685,11 @@
 			"cost": {
 				"input": 1.25,
 				"output": 10,
-				"cacheRead": 0.125,
+				"cacheRead": 0.13,
 				"cacheWrite": 0
 			},
 			"contextWindow": 128000,
-			"maxTokens": 16384
+			"maxTokens": 32000
 		},
 		"openai/gpt-5.1-codex": {
 			"id": "openai/gpt-5.1-codex",
@@ -58636,7 +58705,7 @@
 			"cost": {
 				"input": 1.25,
 				"output": 10,
-				"cacheRead": 0.125,
+				"cacheRead": 0.13,
 				"cacheWrite": 0
 			},
 			"contextWindow": 272000,
@@ -58686,11 +58755,11 @@
 			"cost": {
 				"input": 0.25,
 				"output": 2,
-				"cacheRead": 0.03,
+				"cacheRead": 0.024999999999999998,
 				"cacheWrite": 0
 			},
 			"contextWindow": 272000,
-			"maxTokens": 128000,
+			"maxTokens": 100000,
 			"thinking": {
 				"mode": "effort",
 				"minLevel": "medium",
@@ -58740,7 +58809,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 128000,
-			"maxTokens": 32000
+			"maxTokens": 16384
 		},
 		"openai/gpt-5.2-codex": {
 			"id": "openai/gpt-5.2-codex",
@@ -61027,13 +61096,13 @@
 				"text"
 			],
 			"cost": {
-				"input": 0.06599999999999999,
-				"output": 0.26,
-				"cacheRead": 0.029,
+				"input": 0.063,
+				"output": 0.21,
+				"cacheRead": 0.020999999999999998,
 				"cacheWrite": 0
 			},
 			"contextWindow": 262144,
-			"maxTokens": 262144,
+			"maxTokens": 64000,
 			"thinking": {
 				"mode": "effort",
 				"minLevel": "minimal",

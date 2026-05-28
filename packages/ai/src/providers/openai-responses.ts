@@ -102,6 +102,16 @@ export interface OpenAIResponsesOptions extends StreamOptions {
 const OPENAI_RESPONSES_PROVIDER_SESSION_STATE_PREFIX = "openai-responses:";
 const OPENAI_RESPONSES_FIRST_EVENT_TIMEOUT_MESSAGE =
 	"OpenAI responses stream timed out while waiting for the first event";
+const OPENAI_DEFAULT_BASE_URL = "https://api.openai.com/v1";
+
+function resolveOpenAIProviderBaseUrl(baseUrl: string | undefined): string {
+	const envBaseUrl = $env.OPENAI_BASE_URL?.trim();
+	const configuredBaseUrl = baseUrl?.trim();
+	if (envBaseUrl && (!configuredBaseUrl || configuredBaseUrl.toLowerCase().includes("api.openai.com"))) {
+		return envBaseUrl;
+	}
+	return configuredBaseUrl || envBaseUrl || OPENAI_DEFAULT_BASE_URL;
+}
 
 const OPENAI_RESPONSES_PROGRESS_EVENT_TYPES = new Set([
 	"response.created",
@@ -224,7 +234,7 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses"> = (
 				api: output.api,
 				model: model.id,
 				method: "POST",
-				url: `${baseUrl ?? "https://api.openai.com/v1"}/responses`,
+				url: `${baseUrl}/responses`,
 				body: params,
 			};
 			const openaiStream = await callWithCopilotModelRetry(
@@ -331,7 +341,7 @@ function createClient(
 	const headers = { ...(model.headers ?? {}), ...(extraHeaders ?? {}) };
 	let copilotPremiumRequests: number | undefined;
 
-	let baseUrl = model.baseUrl;
+	let baseUrl = model.provider === "openai" ? resolveOpenAIProviderBaseUrl(model.baseUrl) : model.baseUrl;
 	if (model.provider === "github-copilot") {
 		apiKey = parseGitHubCopilotApiKey(rawApiKey).accessToken;
 		const hasImages = hasCopilotVisionInput(context.messages);

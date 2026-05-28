@@ -1,3 +1,4 @@
+import { $env } from "@gajae-code/utils";
 import type { ModelManagerOptions } from "../model-manager";
 import { Effort } from "../model-thinking";
 import { getBundledModels } from "../models";
@@ -14,6 +15,7 @@ import { createBundledReferenceMap, createReferenceResolver } from "./bundled-re
 
 const MODELS_DEV_URL = "https://models.dev/api.json";
 const ANTHROPIC_BASE_URL = "https://api.anthropic.com/v1";
+const OPENAI_DEFAULT_BASE_URL = "https://api.openai.com/v1";
 const ANTHROPIC_OAUTH_BETA =
 	"claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,context-management-2025-06-27,prompt-caching-scope-2026-01-05";
 
@@ -494,7 +496,7 @@ export interface OpenAIModelManagerConfig {
 
 export function openaiModelManagerOptions(config?: OpenAIModelManagerConfig): ModelManagerOptions<"openai-responses"> {
 	const apiKey = config?.apiKey;
-	const baseUrl = config?.baseUrl ?? "https://api.openai.com/v1";
+	const baseUrl = config?.baseUrl?.trim() || $env.OPENAI_BASE_URL?.trim() || OPENAI_DEFAULT_BASE_URL;
 	const references = createBundledReferenceMap<"openai-responses">("openai");
 	return {
 		providerId: "openai",
@@ -2105,7 +2107,7 @@ const MODELS_DEV_PROVIDER_DESCRIPTORS_CORE: readonly ModelsDevProviderDescriptor
 		"https://generativelanguage.googleapis.com/v1beta",
 	),
 	// --- OpenAI ---
-	simpleModelsDevDescriptor("openai", "openai", "openai-responses", "https://api.openai.com/v1"),
+	simpleModelsDevDescriptor("openai", "openai", "openai-responses", ""),
 	// --- Groq ---
 	openAiCompletionsDescriptor("groq", "groq", "https://api.groq.com/openai/v1"),
 	// --- Cerebras ---

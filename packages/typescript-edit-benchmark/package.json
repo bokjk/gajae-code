@@ -4,7 +4,7 @@
 	"name": "@gajae-code/typescript-edit-benchmark",
 	"version": "0.0.1",
 	"description": "Edit benchmark suite using TypeScript source code mutations",
-	"author": "Can Boluk",
+	"author": "Yeachan-Heo",
 	"license": "MIT",
 	"repository": {
 		"type": "git",
@@ -47,5 +47,5 @@
 	"engines": {
 		"bun": ">=1.3.14"
 	},
-	"homepage": "https://gajae-code.dev"
+	"homepage": "https://gaebal-gajae.dev"
 }

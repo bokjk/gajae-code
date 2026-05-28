@@ -3,8 +3,8 @@
 	"name": "@gajae-code/stats",
 	"version": "0.1.2",
 	"description": "Local observability dashboard for pi AI usage statistics",
-	"homepage": "https://gajae-code.dev",
-	"author": "Can Boluk",
+	"homepage": "https://gaebal-gajae.dev",
+	"author": "Yeachan-Heo",
 	"license": "MIT",
 	"repository": {
 		"type": "git",

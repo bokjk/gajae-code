@@ -26,7 +26,9 @@ import {
 	getOpenAIResponsesHistoryPayload,
 	normalizeResponsesToolCallId,
 } from "@gajae-code/ai/utils";
-import { logger } from "@gajae-code/utils";
+import { $env, logger } from "@gajae-code/utils";
+
+const OPENAI_DEFAULT_BASE_URL = "https://api.openai.com/v1";
 
 // ============================================================================
 // Public types
@@ -77,8 +79,12 @@ function resolveOpenAiCompactEndpoint(model: Model): string {
 		return resolveOpenAiCodexCompactEndpoint(model.baseUrl);
 	}
 
-	const defaultBase = "https://api.openai.com/v1";
-	const rawBase = model.baseUrl && model.baseUrl.length > 0 ? model.baseUrl : defaultBase;
+	const envBaseUrl = $env.OPENAI_BASE_URL?.trim();
+	const configuredBaseUrl = model.baseUrl?.trim();
+	const rawBase =
+		envBaseUrl && (!configuredBaseUrl || configuredBaseUrl.toLowerCase().includes("api.openai.com"))
+			? envBaseUrl
+			: configuredBaseUrl || envBaseUrl || OPENAI_DEFAULT_BASE_URL;
 	const normalizedBase = rawBase.endsWith("/") ? rawBase.slice(0, -1) : rawBase;
 	if (normalizedBase.endsWith("/v1")) return `${normalizedBase}/responses/compact`;
 	return `${normalizedBase}/v1/responses/compact`;

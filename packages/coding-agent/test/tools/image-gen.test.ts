@@ -8,6 +8,7 @@ import { imageGenTool, setPreferredImageProvider } from "@gajae-code/coding-agen
 
 const originalFetch = global.fetch;
 const originalOpenRouterKey = Bun.env.OPENROUTER_API_KEY;
+const originalOpenAIBaseUrl = Bun.env.OPENAI_BASE_URL;
 const generatedImagePaths: string[] = [];
 
 afterEach(async () => {
@@ -18,11 +19,17 @@ afterEach(async () => {
 	} else {
 		Bun.env.OPENROUTER_API_KEY = originalOpenRouterKey;
 	}
+	if (originalOpenAIBaseUrl === undefined) {
+		delete Bun.env.OPENAI_BASE_URL;
+	} else {
+		Bun.env.OPENAI_BASE_URL = originalOpenAIBaseUrl;
+	}
 	setPreferredImageProvider("auto");
 });
 
 describe("imageGenTool", () => {
 	it("e2e writes OpenAI Responses image_generation WebP output to a temp file", async () => {
+		delete Bun.env.OPENAI_BASE_URL;
 		let requestUrl: string | undefined;
 		let requestBody: unknown;
 
@@ -88,5 +95,55 @@ describe("imageGenTool", () => {
 		if (!savedPath) throw new Error("Expected generated image path");
 		expect(savedPath.endsWith(".webp")).toBe(true);
 		expect(await Bun.file(savedPath).bytes()).toEqual(Buffer.from("fake-webp"));
+	});
+
+	it("uses OPENAI_BASE_URL for OpenAI image generation when active model still has the default OpenAI URL", async () => {
+		Bun.env.OPENAI_BASE_URL = "https://openai-proxy.example.com/v1";
+		let requestUrl: string | undefined;
+
+		const fetchMock: typeof fetch = (async (input: string | URL | Request) => {
+			requestUrl = input.toString();
+			return new Response(
+				JSON.stringify({
+					output: [
+						{
+							type: "image_generation_call",
+							result: Buffer.from("fake-webp").toString("base64"),
+							status: "completed",
+						},
+					],
+				}),
+				{ status: 200, headers: { "content-type": "application/json" } },
+			);
+		}) as unknown as typeof fetch;
+		fetchMock.preconnect = originalFetch.preconnect;
+		global.fetch = fetchMock;
+
+		const model = {
+			api: "openai-responses",
+			provider: "openai",
+			id: "gpt-5.5",
+			name: "GPT 5.5",
+			baseUrl: "https://api.openai.com/v1",
+		} as Model;
+		const ctx: CustomToolContext = {
+			sessionManager: {
+				getCwd: () => "/tmp",
+				getSessionId: () => "test-session",
+			} as unknown as ReadonlySessionManager,
+			modelRegistry: {
+				getApiKey: async () => "test-openai-key",
+				getApiKeyForProvider: async () => undefined,
+			} as unknown as ModelRegistry,
+			model,
+			isIdle: () => true,
+			hasQueuedMessages: () => false,
+			abort: () => {},
+		};
+
+		const result = await imageGenTool.execute("call-1", { subject: "a cat" }, undefined, ctx);
+		generatedImagePaths.push(...(result.details?.imagePaths ?? []));
+
+		expect(requestUrl).toBe("https://openai-proxy.example.com/v1/responses");
 	});
 });

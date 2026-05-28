@@ -3,6 +3,18 @@ import { buildOpenAiNativeHistory, requestOpenAiRemoteCompaction } from "@gajae-
 import type { AssistantMessage, Model, ToolResultMessage } from "@gajae-code/ai/types";
 import { hookFetch } from "@gajae-code/utils";
 
+function setEnvForTest(key: string, value: string): () => void {
+	const previous = Bun.env[key];
+	Bun.env[key] = value;
+	return () => {
+		if (previous === undefined) {
+			delete Bun.env[key];
+		} else {
+			Bun.env[key] = previous;
+		}
+	};
+}
+
 function makeOpenAiModel(overrides: Partial<Model<"openai-responses">> = {}): Model<"openai-responses"> {
 	return {
 		id: "gpt-5",
@@ -128,6 +140,32 @@ describe("remote compaction input trimming", () => {
 
 		expect(requestInput?.some(item => item.type === "custom_tool_call")).toBe(false);
 		expect(requestInput?.some(item => item.type === "custom_tool_call_output")).toBe(false);
+	});
+});
+
+describe("remote compaction endpoint", () => {
+	test("uses OPENAI_BASE_URL for OpenAI compaction when bundled metadata has the default OpenAI URL", async () => {
+		const restore = setEnvForTest("OPENAI_BASE_URL", "https://openai-proxy.example.com/v1");
+		let requestUrl: string | undefined;
+		try {
+			using _hook = hookFetch(async input => {
+				requestUrl = String(input instanceof Request ? input.url : input);
+				return Response.json({
+					output: [{ type: "compaction_summary", summary: "compact" }],
+				});
+			});
+
+			await requestOpenAiRemoteCompaction(
+				makeOpenAiModel({ baseUrl: "https://api.openai.com/v1" }),
+				"test-key",
+				[{ type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] }],
+				"compact",
+			);
+
+			expect(requestUrl).toBe("https://openai-proxy.example.com/v1/responses/compact");
+		} finally {
+			restore();
+		}
 	});
 });
 

@@ -10,6 +10,18 @@ afterEach(() => {
 	global.fetch = originalFetch;
 });
 
+function setEnvForTest(key: string, value: string): () => void {
+	const previous = Bun.env[key];
+	Bun.env[key] = value;
+	return () => {
+		if (previous === undefined) {
+			delete Bun.env[key];
+		} else {
+			Bun.env[key] = previous;
+		}
+	};
+}
+
 const openAIResponsesModel = getBundledModel("openai", "gpt-5-mini") as Model<"openai-responses">;
 const openAICompletionsModel = {
 	...(getBundledModel("openai", "gpt-4o-mini") as Model<"openai-completions">),
@@ -122,5 +134,67 @@ describe("StreamOptions.fetch override", () => {
 		expect(result.stopReason).toBe("stop");
 		expect(calls.length).toBeGreaterThanOrEqual(1);
 		expect(calls[0]?.url).toContain("/responses");
+	});
+
+	it("uses OPENAI_BASE_URL for openai-responses even when bundled metadata has the default OpenAI URL", async () => {
+		const restore = setEnvForTest("OPENAI_BASE_URL", "https://openai-proxy.example.com/v1");
+		const calls: Array<{ url: string }> = [];
+		try {
+			const customFetch = async (input: string | URL | Request, _init?: RequestInit) => {
+				calls.push({ url: String(input instanceof Request ? input.url : input) });
+				return createSseResponse([
+					{ type: "response.created", response: { id: "resp_test" } },
+					{
+						type: "response.completed",
+						response: {
+							id: "resp_test",
+							status: "completed",
+							usage: { input_tokens: 1, output_tokens: 0, total_tokens: 1 },
+						},
+					},
+				]);
+			};
+
+			const staleBundledDefault = { ...openAIResponsesModel, baseUrl: "https://api.openai.com/v1" };
+			await streamOpenAIResponses(staleBundledDefault, baseContext(), {
+				apiKey: "test-key",
+				fetch: customFetch,
+			}).result();
+
+			expect(calls[0]?.url).toBe("https://openai-proxy.example.com/v1/responses");
+		} finally {
+			restore();
+		}
+	});
+
+	it("uses OPENAI_BASE_URL for openai-completions even when bundled metadata has the default OpenAI URL", async () => {
+		const restore = setEnvForTest("OPENAI_BASE_URL", "https://openai-proxy.example.com/v1");
+		const calls: Array<{ url: string }> = [];
+		try {
+			const customFetch = async (input: string | URL | Request, _init?: RequestInit) => {
+				calls.push({ url: String(input instanceof Request ? input.url : input) });
+				return createSseResponse([
+					{
+						id: "chatcmpl-test",
+						object: "chat.completion.chunk",
+						created: 0,
+						model: openAICompletionsModel.id,
+						choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+						usage: { prompt_tokens: 1, completion_tokens: 0, total_tokens: 1 },
+					},
+					"[DONE]",
+				]);
+			};
+
+			const staleBundledDefault = { ...openAICompletionsModel, baseUrl: "https://api.openai.com/v1" };
+			await streamOpenAICompletions(staleBundledDefault, baseContext(), {
+				apiKey: "test-key",
+				fetch: customFetch,
+			}).result();
+
+			expect(calls[0]?.url).toBe("https://openai-proxy.example.com/v1/chat/completions");
+		} finally {
+			restore();
+		}
 	});
 });

@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-05-28
+
+### Changed
+
+- Updated package metadata for the Gajae Code npm publication.
+
 ## [0.1.1] - 2026-05-28
 ### Breaking Changes
 
