@@ -251,3 +251,74 @@ Project executor override body.
 		expect(await Bun.file(deepInterviewSkillPath).text()).toBe(installedDeepInterview);
 	});
 });
+
+describe("bundled skills CLI", () => {
+	it("reads embedded workflow skills from outside the repository without .gjc files", async () => {
+		const externalRoot = await makeTempRoot();
+		const proc = Bun.spawn(
+			[
+				process.execPath,
+				path.join(repoRoot, "packages", "coding-agent", "src", "cli.ts"),
+				"skills",
+				"read",
+				"ultragoal",
+				"--json",
+			],
+			{
+				cwd: externalRoot,
+				stdout: "pipe",
+				stderr: "pipe",
+				env: {
+					...process.env,
+					HOME: await makeTempRoot(),
+					PI_NO_TITLE: "1",
+					NO_COLOR: "1",
+				},
+			},
+		);
+		const stdout = await new Response(proc.stdout).text();
+		const stderr = await new Response(proc.stderr).text();
+		const exitCode = await proc.exited;
+
+		expect(exitCode).toBe(0);
+		expect(stderr).toBe("");
+		const parsed = JSON.parse(stdout) as { name: string; path: string; source: string; content: string };
+		expect(parsed.name).toBe("ultragoal");
+		expect(parsed.path).toBe("embedded:gjc/skills/ultragoal/SKILL.md");
+		expect(parsed.source).toBe("bundled:default");
+		expect(parsed.content).toContain("# Ultragoal");
+	});
+
+	it("lists exactly the embedded default workflow skills", async () => {
+		const externalRoot = await makeTempRoot();
+		const proc = Bun.spawn(
+			[
+				process.execPath,
+				path.join(repoRoot, "packages", "coding-agent", "src", "cli.ts"),
+				"skills",
+				"list",
+				"--json",
+			],
+			{
+				cwd: externalRoot,
+				stdout: "pipe",
+				stderr: "pipe",
+				env: {
+					...process.env,
+					HOME: await makeTempRoot(),
+					PI_NO_TITLE: "1",
+					NO_COLOR: "1",
+				},
+			},
+		);
+		const stdout = await new Response(proc.stdout).text();
+		const stderr = await new Response(proc.stderr).text();
+		const exitCode = await proc.exited;
+
+		expect(exitCode).toBe(0);
+		expect(stderr).toBe("");
+		const parsed = JSON.parse(stdout) as { skills: Array<{ name: string; path: string }> };
+		expect(parsed.skills.map(skill => skill.name).sort()).toEqual([...DEFAULT_GJC_DEFINITION_NAMES].sort());
+		expect(parsed.skills.every(skill => skill.path.startsWith("embedded:gjc/skills/"))).toBe(true);
+	});
+});
