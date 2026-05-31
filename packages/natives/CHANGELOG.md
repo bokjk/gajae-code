@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-05-31
+
 ### Changed
 
 - Refreshed native package metadata and version sentinel for the GJC 0.2.2 release.
