@@ -1,4 +1,5 @@
 import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
 import { syncSkillActiveState } from "../skill-state/active-state";
 import { buildDeepInterviewHudSummary } from "../skill-state/workflow-hud";
@@ -20,6 +21,8 @@ export interface DeepInterviewCommandResult {
 }
 
 const PATH_COMPONENT_RE = /^[A-Za-z0-9_-][A-Za-z0-9._-]{0,63}$/;
+
+const DEFAULT_AMBIGUITY_THRESHOLD = 0.05;
 
 const RESOLUTION_THRESHOLDS = {
 	quick: 0.6,
@@ -70,7 +73,43 @@ interface ResolvedDeepInterviewArgs {
 	json: boolean;
 }
 
-function resolveDeepInterviewArgs(args: readonly string[]): ResolvedDeepInterviewArgs {
+async function readSettingsAmbiguityThreshold(
+	settingsPath: string,
+): Promise<{ threshold: number; source: string } | undefined> {
+	let raw: string;
+	try {
+		raw = await fs.readFile(settingsPath, "utf-8");
+	} catch (error) {
+		const err = error as NodeJS.ErrnoException;
+		if (err.code === "ENOENT") return undefined;
+		return undefined;
+	}
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(raw);
+	} catch {
+		return undefined;
+	}
+	const candidate = (parsed as { gjc?: { deepInterview?: { ambiguityThreshold?: unknown } } })?.gjc?.deepInterview
+		?.ambiguityThreshold;
+	if (typeof candidate !== "number" || !Number.isFinite(candidate) || candidate <= 0 || candidate > 1) {
+		return undefined;
+	}
+	return { threshold: candidate, source: settingsPath };
+}
+
+async function resolveConfiguredAmbiguityThreshold(
+	cwd: string,
+): Promise<{ threshold: number; source: string } | undefined> {
+	const projectSettings = path.join(cwd, ".gjc", "settings.json");
+	const projectValue = await readSettingsAmbiguityThreshold(projectSettings);
+	if (projectValue) return projectValue;
+	const configDir = process.env.GJC_CONFIG_DIR?.trim() || path.join(os.homedir(), ".gjc");
+	const userSettings = path.join(configDir, "settings.json");
+	return await readSettingsAmbiguityThreshold(userSettings);
+}
+
+async function resolveDeepInterviewArgs(args: readonly string[], cwd: string): Promise<ResolvedDeepInterviewArgs> {
 	const sessionId = flagValue(args, "--session-id")?.trim() || undefined;
 	if (sessionId) assertSafePathComponent(sessionId, "session-id");
 
@@ -78,10 +117,11 @@ function resolveDeepInterviewArgs(args: readonly string[]): ResolvedDeepIntervie
 	if (explicitResolutions.length > 1) {
 		throw new DeepInterviewCommandError(2, "pass at most one of --quick, --standard, --deep");
 	}
-	const resolution: DeepInterviewResolution = explicitResolutions[0] ?? "standard";
+	const resolution: DeepInterviewResolution | undefined = explicitResolutions[0];
 
-	let threshold: number = RESOLUTION_THRESHOLDS[resolution];
-	let thresholdSource: string = `flag:--${resolution}`;
+	// Precedence: --threshold > settings.json (project then user) > resolution flag default > 0.05.
+	let threshold: number = DEFAULT_AMBIGUITY_THRESHOLD;
+	let thresholdSource = "default";
 	const thresholdOverride = flagValue(args, "--threshold");
 	if (thresholdOverride !== undefined) {
 		const parsed = Number(thresholdOverride);
@@ -93,6 +133,15 @@ function resolveDeepInterviewArgs(args: readonly string[]): ResolvedDeepIntervie
 		}
 		threshold = parsed;
 		thresholdSource = flagValue(args, "--threshold-source")?.trim() || "flag:--threshold";
+	} else {
+		const configured = await resolveConfiguredAmbiguityThreshold(cwd);
+		if (configured) {
+			threshold = configured.threshold;
+			thresholdSource = configured.source;
+		} else if (resolution) {
+			threshold = RESOLUTION_THRESHOLDS[resolution];
+			thresholdSource = `flag:--${resolution}`;
+		}
 	}
 
 	const ideaParts: string[] = [];
@@ -113,7 +162,15 @@ function resolveDeepInterviewArgs(args: readonly string[]): ResolvedDeepIntervie
 		ideaParts.push(arg);
 	}
 	const idea = ideaParts.join(" ").trim();
-	return { resolution, threshold, thresholdSource, sessionId, idea, json: hasFlag(args, "--json") };
+	const effectiveResolution: DeepInterviewResolution = resolution ?? "standard";
+	return {
+		resolution: effectiveResolution,
+		threshold,
+		thresholdSource,
+		sessionId,
+		idea,
+		json: hasFlag(args, "--json"),
+	};
 }
 
 async function seedDeepInterviewState(cwd: string, resolved: ResolvedDeepInterviewArgs): Promise<string> {
@@ -180,7 +237,7 @@ export async function runNativeDeepInterviewCommand(
 	cwd = process.cwd(),
 ): Promise<DeepInterviewCommandResult> {
 	try {
-		const resolved = resolveDeepInterviewArgs(args);
+		const resolved = await resolveDeepInterviewArgs(args, cwd);
 		if (!resolved.idea) {
 			throw new DeepInterviewCommandError(
 				2,

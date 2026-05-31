@@ -16,7 +16,7 @@ afterEach(async () => {
 });
 
 describe("native gjc deep-interview runtime", () => {
-	it("defaults to --standard threshold when no resolution flag is set", async () => {
+	it("defaults to the SKILL.md default threshold (0.05) when no resolution flag or settings exist", async () => {
 		const root = await tempDir();
 		const result = await runNativeDeepInterviewCommand(["my vague idea"], root);
 		expect(result.status).toBe(0);
@@ -24,9 +24,40 @@ describe("native gjc deep-interview runtime", () => {
 			await fs.readFile(path.join(root, ".gjc", "state", "deep-interview-state.json"), "utf-8"),
 		);
 		expect(state.resolution).toBe("standard");
-		expect(state.threshold).toBeCloseTo(0.5);
-		expect(state.threshold_source).toBe("flag:--standard");
+		expect(state.threshold).toBeCloseTo(0.05);
+		expect(state.threshold_source).toBe("default");
 		expect(state.state.initial_idea).toBe("my vague idea");
+	});
+
+	it("honors gjc.deepInterview.ambiguityThreshold in project .gjc/settings.json", async () => {
+		const root = await tempDir();
+		await fs.mkdir(path.join(root, ".gjc"), { recursive: true });
+		await fs.writeFile(
+			path.join(root, ".gjc", "settings.json"),
+			JSON.stringify({ gjc: { deepInterview: { ambiguityThreshold: 0.08 } } }),
+		);
+		const result = await runNativeDeepInterviewCommand(["--standard", "--json", "idea"], root);
+		expect(result.status).toBe(0);
+		const payload = JSON.parse(result.stdout ?? "{}");
+		expect(payload.threshold).toBeCloseTo(0.08);
+		expect(payload.threshold_source).toBe(path.join(root, ".gjc", "settings.json"));
+	});
+
+	it("--threshold beats project settings.json", async () => {
+		const root = await tempDir();
+		await fs.mkdir(path.join(root, ".gjc"), { recursive: true });
+		await fs.writeFile(
+			path.join(root, ".gjc", "settings.json"),
+			JSON.stringify({ gjc: { deepInterview: { ambiguityThreshold: 0.08 } } }),
+		);
+		const result = await runNativeDeepInterviewCommand(
+			["--threshold", "0.25", "--threshold-source", "flag:explicit", "--json", "idea"],
+			root,
+		);
+		expect(result.status).toBe(0);
+		const payload = JSON.parse(result.stdout ?? "{}");
+		expect(payload.threshold).toBeCloseTo(0.25);
+		expect(payload.threshold_source).toBe("flag:explicit");
 	});
 
 	it("--quick / --standard / --deep map to their resolution thresholds", async () => {
