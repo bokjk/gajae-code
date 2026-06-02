@@ -128,9 +128,12 @@ describe("RuntimeOwner (in-process integration)", () => {
 		const ret = (await callEndpoint(info.socketPath, { verb: "retire", input: {} })) as Record<string, unknown>;
 		expect((ret.evidence as Record<string, unknown>).retired).toBe(true);
 
-		// Give the owner a tick to release the lease + close the endpoint.
-		await new Promise(r => setTimeout(r, 50));
-		const after = await resolveOwner(root, SID);
+		// Poll for the owner to release the lease + close the endpoint (robust under load).
+		let after = await resolveOwner(root, SID);
+		for (let i = 0; i < 100 && after.live; i++) {
+			await new Promise(r => setTimeout(r, 20));
+			after = await resolveOwner(root, SID);
+		}
 		expect(after.live).toBe(false);
 	});
 });
