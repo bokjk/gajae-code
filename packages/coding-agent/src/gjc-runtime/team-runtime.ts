@@ -247,6 +247,23 @@ export interface GjcTeamApiClaimResult {
 	claim_token?: string;
 	reason?: string;
 }
+export type GjcTeamLivenessRecoveryReason =
+	| "claim_expired"
+	| "stale_heartbeat"
+	| "missing_pane"
+	| "worker_lifecycle_failed"
+	| "worker_lifecycle_stopped";
+
+export interface GjcTeamRecoveredClaim {
+	task_id: string;
+	worker: string;
+	reasons: GjcTeamLivenessRecoveryReason[];
+}
+
+export interface GjcTeamLivenessRecoveryResult {
+	recovered_claims: GjcTeamRecoveredClaim[];
+	stale_workers: Record<string, GjcTeamLivenessRecoveryReason[]>;
+}
 
 export interface GjcTeamMailboxMessage {
 	message_id: string;
@@ -431,6 +448,7 @@ export const GJC_TEAM_API_OPERATIONS = [
 	"read-worker-status",
 	"update-worker-status",
 	"read-worker-heartbeat",
+	"recover-stale-claims",
 	"update-worker-heartbeat",
 	"write-worker-inbox",
 	"write-worker-identity",
@@ -787,6 +805,135 @@ export async function persistGjcTeamModeStateSummary(snapshot: GjcTeamSnapshot, 
 			audit: { category: "state", verb: "sync-team-summary", owner: "gjc-runtime", skill: "team" },
 		},
 	);
+}
+
+function appendLivenessRecoveryReason(
+	reasons: GjcTeamLivenessRecoveryReason[],
+	reason: GjcTeamLivenessRecoveryReason,
+): void {
+	if (!reasons.includes(reason)) reasons.push(reason);
+}
+
+function isPastTimestamp(value: string | undefined): boolean {
+	if (!value) return false;
+	const timestamp = Date.parse(value);
+	return Number.isFinite(timestamp) && timestamp <= Date.now();
+}
+
+function readClaimRecord(value: unknown): GjcTeamTaskClaim | undefined {
+	if (!isRecord(value)) return undefined;
+	const owner = typeof value.owner === "string" ? value.owner : "";
+	const token = typeof value.token === "string" ? value.token : "";
+	const leasedUntil = typeof value.leased_until === "string" ? value.leased_until : "";
+	if (!owner || !token || !leasedUntil) return undefined;
+	return { owner, token, leased_until: leasedUntil };
+}
+
+function isWorkerHeartbeatStale(
+	worker: GjcTeamWorker,
+	heartbeat: WorkerHeartbeatFile | null,
+	env: NodeJS.ProcessEnv,
+): boolean {
+	const thresholdMs = parseDurationEnv(env, "GJC_TEAM_HEARTBEAT_STALE_MS", 120_000);
+	if (thresholdMs <= 0) return false;
+	const heartbeatAt = Date.parse(heartbeat?.last_turn_at ?? worker.last_heartbeat);
+	return Number.isFinite(heartbeatAt) && Date.now() - heartbeatAt >= thresholdMs;
+}
+
+async function detectGjcTeamWorkerLivenessReasons(
+	dir: string,
+	config: GjcTeamConfig,
+	worker: GjcTeamWorker,
+	env: NodeJS.ProcessEnv,
+): Promise<GjcTeamLivenessRecoveryReason[]> {
+	const reasons: GjcTeamLivenessRecoveryReason[] = [];
+	const lifecycle = await readWorkerLifecycleRecord(dir, worker);
+	const heartbeat = await readJsonFile<WorkerHeartbeatFile>(path.join(workerDir(dir, worker.id), "heartbeat.json"));
+	if (lifecycle.lifecycle_state === "failed") appendLivenessRecoveryReason(reasons, "worker_lifecycle_failed");
+	if (lifecycle.lifecycle_state === "stopped") appendLivenessRecoveryReason(reasons, "worker_lifecycle_stopped");
+	if (isWorkerHeartbeatStale(worker, heartbeat, env)) appendLivenessRecoveryReason(reasons, "stale_heartbeat");
+	if (!config.dry_run && (!worker.pane_id?.startsWith("%") || !paneBelongsToTeamTarget(config, worker.pane_id)))
+		appendLivenessRecoveryReason(reasons, "missing_pane");
+	return reasons;
+}
+
+async function reconcileGjcTeamStaleClaims(
+	teamName: string,
+	dir: string,
+	config: GjcTeamConfig,
+	env: NodeJS.ProcessEnv,
+): Promise<GjcTeamLivenessRecoveryResult> {
+	const staleWorkers: Record<string, GjcTeamLivenessRecoveryReason[]> = {};
+	for (const worker of config.workers) {
+		const reasons = await detectGjcTeamWorkerLivenessReasons(dir, config, worker, env);
+		if (reasons.length === 0) continue;
+		staleWorkers[worker.id] = reasons;
+		if (reasons.includes("missing_pane") && reasons.includes("worker_lifecycle_stopped") === false) {
+			await writeWorkerLifecycleRecord(dir, worker, "failed", { stop_reason: "pane_missing" });
+		}
+	}
+
+	const recoveredClaims: GjcTeamRecoveredClaim[] = [];
+	for (const task of await readTasks(dir)) {
+		if (task.status === "completed" || task.status === "failed") continue;
+		const claimPath = path.join(dir, "claims", `${task.id}.json`);
+		const diskClaim = readClaimRecord(await readJsonFile<unknown>(claimPath));
+		const claim = task.claim ?? diskClaim;
+		if (!claim) continue;
+
+		const reasons = [...(staleWorkers[claim.owner] ?? [])];
+		if (isPastTimestamp(claim.leased_until)) appendLivenessRecoveryReason(reasons, "claim_expired");
+		if (reasons.length === 0) continue;
+
+		await fs.rm(claimPath, { force: true });
+		recoveredClaims.push({ task_id: task.id, worker: claim.owner, reasons });
+		if (task.status !== "in_progress") {
+			await appendEvent(dir, {
+				type: "task_claim_recovered",
+				task_id: task.id,
+				worker: claim.owner,
+				message: "Removed stale task claim file",
+				data: { reasons },
+			});
+			continue;
+		}
+
+		const recoveredTask = normalizeTask({
+			...task,
+			status: "pending",
+			assignee: undefined,
+			claim: undefined,
+			version: task.version + 1,
+			updated_at: now(),
+		});
+		await writeTask(dir, recoveredTask);
+		await appendEvent(dir, {
+			type: "task_claim_recovered",
+			task_id: task.id,
+			worker: claim.owner,
+			message: "Recovered task from stale worker claim",
+			data: { reasons },
+		});
+	}
+
+	if (recoveredClaims.length > 0)
+		await appendTelemetry(dir, {
+			type: "team_liveness_recovery",
+			message: `Recovered ${recoveredClaims.length} stale team task claim(s)`,
+			data: { team_name: teamName, recovered_claims: recoveredClaims },
+		});
+
+	return { recovered_claims: recoveredClaims, stale_workers: staleWorkers };
+}
+
+export async function recoverGjcTeamStaleClaims(
+	teamName: string,
+	cwd = process.cwd(),
+	env: NodeJS.ProcessEnv = process.env,
+): Promise<GjcTeamLivenessRecoveryResult> {
+	const dir = await findTeamDir(teamName, cwd, env);
+	const config = await readConfig(dir);
+	return reconcileGjcTeamStaleClaims(teamName, dir, config, env);
 }
 
 function normalizeTask(raw: GjcTeamTask): GjcTeamTask {
@@ -2251,6 +2398,7 @@ export async function monitorGjcTeam(
 	const dir = await findTeamDir(teamName, cwd, env);
 	const config = await readConfig(dir);
 	const previous = await readJsonFile<GjcTeamMonitorSnapshot>(monitorSnapshotPath(dir));
+	await reconcileGjcTeamStaleClaims(teamName, dir, config, env);
 	const integrationByWorker = await integrateGjcWorkerCommits(config, dir, previous, cwd, env);
 	await writeJsonFile(monitorSnapshotPath(dir), { integration_by_worker: integrationByWorker, updated_at: now() });
 	await replayGjcTeamNotifications(teamName, cwd, env);
@@ -2570,6 +2718,10 @@ export async function claimGjcTeamTask(
 	const dir = await findTeamDir(teamName, cwd, env);
 	const config = await readConfig(dir);
 	assertKnownWorker(config, workerId);
+	const livenessRecovery = await reconcileGjcTeamStaleClaims(teamName, dir, config, env);
+	const staleWorkerReasons = livenessRecovery.stale_workers[workerId];
+	if (staleWorkerReasons?.length)
+		return { ok: false, reason: `worker_not_live:${workerId}:${staleWorkerReasons.join(",")}` };
 	const tasks = await readTasks(dir);
 	const task = taskId
 		? tasks.find(candidate => candidate.id === taskId)
@@ -3438,6 +3590,8 @@ export async function executeGjcTeamApiOperation(
 		}
 		case "read-worker-heartbeat":
 			return readGjcWorkerHeartbeat(teamName, worker, cwd, env);
+		case "recover-stale-claims":
+			return recoverGjcTeamStaleClaims(teamName, cwd, env);
 		case "update-worker-heartbeat":
 			return updateGjcWorkerHeartbeat(
 				teamName,

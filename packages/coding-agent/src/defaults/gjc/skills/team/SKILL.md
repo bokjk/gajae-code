@@ -186,6 +186,7 @@ Minimum acceptable loop:
 ```bash
 sleep 30 && gjc team status <team-name>
 ```
+The monitor path also performs bounded liveness recovery: expired task claims, stale heartbeat claims, and missing recorded worker panes are requeued instead of leaving work permanently `in_progress`.
 
 ## Operational Commands
 
@@ -197,10 +198,11 @@ gjc team shutdown <team-name>
 
 Semantics:
 
-- `status`: mutating monitor path; reads team snapshot and applies pending worker worktree integration before returning task counts, worker state, tmux target/pane evidence, and `integration_by_worker`.
-- `resume`: mutating monitor path; performs the same integration-aware live snapshot for reconnect/inspection flows.
+- `status`: mutating monitor path; reads team snapshot, recovers expired/stale worker claims, applies pending worker worktree integration, and returns task counts, worker state, tmux target/pane evidence, `worker_lifecycle_by_id`, and `integration_by_worker`.
+- `resume`: mutating monitor path; performs the same liveness-recovery and integration-aware live snapshot for reconnect/inspection flows.
 - `list`: pure read path; lists known teams without integrating worker commits.
 - API/read-only snapshot operations are pure unless explicitly documented as a monitor/status path.
+- `claim-task`: mutating task path; before granting a new claim, it recovers expired claims and rejects claims from workers already classified as not live.
 - `shutdown`: writes per-worker graceful `shutdown-request.json`, moves lifecycle through `draining` to `stopped`, kills the recorded worker pane when it still belongs to the stored tmux target, removes clean created worktrees, marks worker runtime status stopped, and sets phase from task plus lifecycle evidence: `complete` only when all tasks have structured completion evidence and every worker has matching graceful shutdown lifecycle evidence; `failed` when tasks failed/blocked or legacy completed tasks lack evidence; and `cancelled` when work remains pending or in progress. It preserves `.gjc/state/team/<team>` as evidence.
 
 ## Data Plane and Control Plane
@@ -241,6 +243,7 @@ gjc team api worker-startup-ack --input '{"team_name":"my-team","worker_id":"wor
 gjc team api claim-task --input '{"team_name":"my-team","worker_id":"worker-1"}' --json
 gjc team api transition-task-status --input '{"team_name":"my-team","task_id":"task-1","to":"completed","worker_id":"worker-1","claim_token":"<claim-token>","completion_evidence":{"summary":"done","items":[{"kind":"command","status":"passed","summary":"focused tests passed","command":"bun test packages/coding-agent/test/gjc-runtime/team-runtime.test.ts"}]}}' --json
 gjc team api update-worker-status --input '{"team_name":"my-team","worker_id":"worker-1","status":"working","current_task_id":"task-1"}' --json
+gjc team api recover-stale-claims --input '{"team_name":"my-team"}' --json
 ```
 
 Canonical worker lifecycle operations:
@@ -248,10 +251,11 @@ Canonical worker lifecycle operations:
 - `worker-startup-ack` before task work; this records startup ACK and moves `workers/<worker>/lifecycle.json` to `ready`
 - `claim-task`
 - `update-worker-status` when the worker starts/stops a task-local activity; this updates worker-reported `status.json` without replacing the runtime lifecycle source of truth
+- `recover-stale-claims` is leader/runtime-owned; it clears expired claim files, requeues in-progress tasks claimed by stale workers, and records `task_claim_recovered` events without modifying terminal task records or completion evidence
 - `transition-task-status` with the claim token, worker id, and structured completion evidence
 - `release-task-claim`
 
-GJC-team interop operations are also available for mailbox, native notification, worker heartbeat/status, startup ACK, events, monitor snapshots, approvals, and shutdown request/ack flows; run `gjc team api --help` for the full operation list.
+GJC-team interop operations are also available for mailbox, native notification, worker heartbeat/status, stale-claim recovery, startup ACK, events, monitor snapshots, approvals, and shutdown request/ack flows; run `gjc team api --help` for the full operation list.
 
 ## GJC-native concept parity
 

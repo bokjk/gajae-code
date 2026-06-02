@@ -901,6 +901,110 @@ describe("native gjc team runtime", () => {
 		expect(stopped.phase).toBe("failed");
 		expect(await readEvents(stateDir)).toContain("completion_evidence_required:task-1");
 	});
+
+	it("recovers expired task claims before new claim attempts", async () => {
+		cleanupRoot = await fs.mkdtemp(path.join(os.tmpdir(), "gjc-team-runtime-"));
+		await startGjcTeam({
+			workerCount: 1,
+			agentType: "executor",
+			task: "Recover expired claim",
+			teamName: "expired-claim-team",
+			cwd: cleanupRoot,
+			dryRun: true,
+			env: { PATH: "" },
+		});
+		const stateDir = path.join(cleanupRoot, ".gjc", "state", "team", "expired-claim-team");
+		const claim = await claimGjcTeamTask("expired-claim-team", "worker-1", cleanupRoot, { PATH: "" });
+		expect(claim.ok).toBe(true);
+		const claimedTask = await readGjcTeamTask("expired-claim-team", "task-1", cleanupRoot, { PATH: "" });
+		if (!claimedTask.claim) throw new Error("expected claimed task");
+		const expiredClaim = { ...claimedTask.claim, leased_until: new Date(Date.now() - 60_000).toISOString() };
+		await Bun.write(
+			path.join(stateDir, "tasks", "task-1.json"),
+			`${JSON.stringify({ ...claimedTask, claim: expiredClaim }, null, 2)}\n`,
+		);
+		await Bun.write(path.join(stateDir, "claims", "task-1.json"), `${JSON.stringify(expiredClaim, null, 2)}\n`);
+
+		const recoveredClaim = await claimGjcTeamTask("expired-claim-team", "worker-1", cleanupRoot, { PATH: "" });
+		expect(recoveredClaim.ok).toBe(true);
+		expect(recoveredClaim.claim_token).not.toBe(claim.claim_token);
+		expect(recoveredClaim.task?.status).toBe("in_progress");
+		expect(recoveredClaim.task?.claim?.leased_until).not.toBe(expiredClaim.leased_until);
+		expect(await readEvents(stateDir)).toContain("claim_expired");
+	});
+
+	it("recovers stale heartbeat claims during monitor and blocks stale workers from reclaiming", async () => {
+		cleanupRoot = await fs.mkdtemp(path.join(os.tmpdir(), "gjc-team-runtime-"));
+		await startGjcTeam({
+			workerCount: 1,
+			agentType: "executor",
+			task: "Recover stale heartbeat",
+			teamName: "stale-heartbeat-team",
+			cwd: cleanupRoot,
+			dryRun: true,
+			env: { PATH: "" },
+		});
+		const stateDir = path.join(cleanupRoot, ".gjc", "state", "team", "stale-heartbeat-team");
+		const claim = await claimGjcTeamTask("stale-heartbeat-team", "worker-1", cleanupRoot, { PATH: "" });
+		expect(claim.ok).toBe(true);
+		await Bun.write(
+			path.join(stateDir, "workers", "worker-1", "heartbeat.json"),
+			`${JSON.stringify(
+				{ pid: 0, last_turn_at: new Date(Date.now() - 60_000).toISOString(), turn_count: 1, alive: true },
+				null,
+				2,
+			)}\n`,
+		);
+
+		const snapshot = await monitorGjcTeam("stale-heartbeat-team", cleanupRoot, {
+			PATH: "",
+			GJC_TEAM_HEARTBEAT_STALE_MS: "1",
+		});
+		expect(snapshot.task_counts.pending).toBe(1);
+		expect(await Bun.file(path.join(stateDir, "claims", "task-1.json")).exists()).toBe(false);
+		expect(await readEvents(stateDir)).toContain("stale_heartbeat");
+
+		const retry = await claimGjcTeamTask("stale-heartbeat-team", "worker-1", cleanupRoot, {
+			PATH: "",
+			GJC_TEAM_HEARTBEAT_STALE_MS: "1",
+		});
+		expect(retry.ok).toBe(false);
+		expect(retry.reason).toContain("worker_not_live:worker-1:stale_heartbeat");
+	});
+
+	it("recovers missing-pane claims and marks the worker lifecycle failed", async () => {
+		cleanupRoot = await createGitRepo();
+		const fakeTmux = await createFakeTmuxBin(cleanupRoot);
+		const snapshot = await startGjcTeam({
+			workerCount: 1,
+			agentType: "executor",
+			task: "Recover missing pane",
+			teamName: "missing-pane-team",
+			cwd: cleanupRoot,
+			env: { PATH: process.env.PATH ?? "", GJC_TEAM_WORKER_COMMAND: "true", GJC_TEAM_TMUX_COMMAND: fakeTmux },
+		});
+		const stateDir = snapshot.state_dir;
+		const claim = await claimGjcTeamTask("missing-pane-team", "worker-1", cleanupRoot, {
+			PATH: process.env.PATH ?? "",
+			GJC_TEAM_TMUX_COMMAND: fakeTmux,
+		});
+		expect(claim.ok).toBe(true);
+		const config = await readTeamConfig(stateDir);
+		await Bun.write(
+			path.join(stateDir, "config.json"),
+			`${JSON.stringify({ ...config, workers: [{ ...config.workers[0], pane_id: "%9" }] }, null, 2)}\n`,
+		);
+
+		const recovered = await monitorGjcTeam("missing-pane-team", cleanupRoot, {
+			PATH: process.env.PATH ?? "",
+			GJC_TEAM_TMUX_COMMAND: fakeTmux,
+		});
+
+		expect(recovered.task_counts.pending).toBe(1);
+		expect(recovered.worker_lifecycle_by_id["worker-1"]?.lifecycle_state).toBe("failed");
+		expect(recovered.worker_lifecycle_by_id["worker-1"]?.stop_reason).toBe("pane_missing");
+		expect(await readEvents(stateDir)).toContain("missing_pane");
+	});
 	it("allows only one worker to claim a task under concurrent claim attempts", async () => {
 		cleanupRoot = await fs.mkdtemp(path.join(os.tmpdir(), "gjc-team-runtime-"));
 		await startGjcTeam({
