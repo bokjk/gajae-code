@@ -268,6 +268,56 @@ describe("GJC skill-active state", () => {
 		});
 	});
 
+	it("supersedes an upstream pipeline skill when a later stage is activated without a handoff verb", async () => {
+		await withTempCwd(async cwd => {
+			// `gjc ralplan` then `gjc ultragoal` each activate their own row; the
+			// ultragoal activation does not demote ralplan, so without the pipeline
+			// collapse the HUD would render ralplan + ultragoal. Only the current
+			// (most-recently-activated) stage should remain.
+			await syncSkillActiveState({
+				cwd,
+				skill: "ralplan",
+				phase: "final",
+				active: true,
+				source: "gjc-ralplan-native",
+				nowIso: "2026-01-01T00:00:00.000Z",
+			});
+			await syncSkillActiveState({
+				cwd,
+				skill: "ultragoal",
+				phase: "executing",
+				active: true,
+				source: "gjc-ultragoal",
+				nowIso: "2026-01-01T00:05:00.000Z",
+			});
+
+			const visible = await readVisibleSkillActiveState(cwd);
+			expect(visible?.active_skills?.map(entry => entry.skill)).toEqual(["ultragoal"]);
+		});
+	});
+
+	it("keeps team alongside ultragoal since team is not part of the planning pipeline", async () => {
+		await withTempCwd(async cwd => {
+			await syncSkillActiveState({
+				cwd,
+				skill: "ultragoal",
+				phase: "executing",
+				active: true,
+				nowIso: "2026-01-01T00:00:00.000Z",
+			});
+			await syncSkillActiveState({
+				cwd,
+				skill: "team",
+				phase: "running",
+				active: true,
+				nowIso: "2026-01-01T00:05:00.000Z",
+			});
+
+			const visible = await readVisibleSkillActiveState(cwd);
+			expect(visible?.active_skills?.map(entry => entry.skill).sort()).toEqual(["team", "ultragoal"]);
+		});
+	});
+
 	it("keeps the canonical GJC workflow skill set intentionally small", () => {
 		expect(CANONICAL_GJC_WORKFLOW_SKILLS).toEqual(["deep-interview", "ralplan", "ultragoal", "team"]);
 	});

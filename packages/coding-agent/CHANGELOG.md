@@ -8,7 +8,7 @@
 
 ### Fixed
 
-- Fixed the skill HUD rail showing already-handed-off `deep-interview`/`ralplan` workflows: handoffs now supersede every same-session-scope row of the caller and callee skills (not just the exact `skill::session_id` key), and the visible-state read collapses to the most-recent row per skill before filtering inactive entries, so the HUD renders only the currently-active workflow and self-heals stale on-disk state.
+- Fixed the skill HUD rail showing already-handed-off planning workflows so it renders only the currently-active stage. Handoffs now supersede every same-session-scope row of the caller and callee skills (not just the exact `skill::session_id` key), and the visible-state read collapses the `deep-interview → ralplan → ultragoal` pipeline to its most-recent stage. Activating a later stage (e.g. `gjc ultragoal` after ralplan) now supersedes the earlier one even when the activation path does not run the `handoff` verb, while `team` still coexists with ultragoal. Existing stale on-disk state self-heals on read.
 
 ## [0.2.4] - 2026-06-02
 

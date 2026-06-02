@@ -373,6 +373,30 @@ function dedupeVisibleBySkill(entries: SkillActiveEntry[]): SkillActiveEntry[] {
 	return [...winners.values()];
 }
 
+/**
+ * The planning pipeline advances one stage at a time: `deep-interview →
+ * ralplan → ultragoal`. Each stage is activated through its own command path
+ * (`gjc deep-interview`, `gjc ralplan`, `gjc ultragoal`), and those activations
+ * do not demote the previous stage's row — only the explicit `handoff` verb
+ * does. Without this collapse, activating ultragoal while ralplan is still
+ * `active:true` would render both stages and keep showing a workflow that has
+ * already handed control forward. Keep only the most recently updated pipeline
+ * stage so the HUD reflects the single current workflow. `team` is intentionally
+ * excluded — it runs alongside ultragoal — and every non-pipeline skill is left
+ * untouched.
+ */
+const PLANNING_PIPELINE_SKILLS = new Set<string>(["deep-interview", "ralplan", "ultragoal"]);
+
+function collapsePlanningPipeline(entries: SkillActiveEntry[]): SkillActiveEntry[] {
+	const pipeline = entries.filter(entry => PLANNING_PIPELINE_SKILLS.has(entry.skill));
+	if (pipeline.length <= 1) return entries;
+	let current = pipeline[0];
+	for (const entry of pipeline) {
+		if (entryRecency(entry) >= entryRecency(current)) current = entry;
+	}
+	return entries.filter(entry => !PLANNING_PIPELINE_SKILLS.has(entry.skill) || entry === current);
+}
+
 function mergeVisibleEntries(
 	sessionState: SkillActiveState | null,
 	rootState: SkillActiveState | null,
@@ -385,7 +409,8 @@ function mergeVisibleEntries(
 	for (const entry of rawActiveEntries(sessionState)) {
 		merged.set(entryKey(entry), entry);
 	}
-	return dedupeVisibleBySkill([...merged.values()]).filter(entry => entry.active !== false);
+	const active = dedupeVisibleBySkill([...merged.values()]).filter(entry => entry.active !== false);
+	return collapsePlanningPipeline(active);
 }
 
 export async function readVisibleSkillActiveState(cwd: string, sessionId?: string): Promise<SkillActiveState | null> {
