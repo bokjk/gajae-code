@@ -4,7 +4,7 @@ import {
 	executeGjcTeamApiOperation,
 	type GjcTeamSnapshot,
 	listGjcTeams,
-	monitorGjcTeam,
+	monitorGjcTeamSnapshot,
 	parseTeamLaunchArgs,
 	persistGjcTeamModeStateSummary,
 	readGjcTeamEvents,
@@ -94,7 +94,7 @@ export default class Team extends Command {
 
 	static args = {
 		action: Args.string({
-			description: "start (default), status, list, shutdown, resume, or api",
+			description: "start (default), status, monitor, list, shutdown, resume, or api",
 			required: false,
 		}),
 	};
@@ -111,6 +111,7 @@ export default class Team extends Command {
 	static examples = [
 		'gjc team 3:executor "Implement the approved plan"',
 		"gjc team status <team-name> --json",
+		"gjc team monitor <team-name> --json",
 		'gjc team api claim-task --input \'{"team_name":"demo","worker_id":"worker-1"}\' --json',
 		'gjc team 2:executor --dry-run --json "Preview state only"',
 		"gjc team shutdown <team-name>",
@@ -132,10 +133,33 @@ export default class Team extends Command {
 			return;
 		}
 
-		if (action === "status" || action === "resume") {
+		if (action === "status") {
 			const teamName = rest.find(arg => !arg.startsWith("--"));
 			if (!teamName) throw new Error("missing_team_name");
-			const snapshot = await monitorGjcTeam(teamName);
+			const snapshot = await readGjcTeamSnapshot(teamName);
+			if (json) {
+				writeJson(snapshot);
+				return;
+			}
+			writeText([
+				`team: ${snapshot.team_name}`,
+				`phase: ${snapshot.phase}`,
+				`tmux: ${snapshot.tmux_target || snapshot.tmux_session}`,
+				`state: ${snapshot.state_dir}`,
+				`tasks: ${snapshot.task_total} (${formatTaskCounts(snapshot.task_counts)})`,
+				`workers: ${formatWorkerLifecycleSummary(snapshot)}`,
+				formatNotificationSummary(snapshot),
+				...formatAwaitingIntegrationNextStep(snapshot),
+				...formatIntegrationSummary(snapshot),
+				"mode: read-only status; use `gjc team monitor <team>` or `gjc team resume <team>` for recovery/integration",
+			]);
+			return;
+		}
+
+		if (action === "monitor" || action === "resume") {
+			const teamName = rest.find(arg => !arg.startsWith("--"));
+			if (!teamName) throw new Error("missing_team_name");
+			const snapshot = await monitorGjcTeamSnapshot(teamName);
 			await syncTeamHud(snapshot);
 			if (json) {
 				writeJson(snapshot);
@@ -151,6 +175,7 @@ export default class Team extends Command {
 				formatNotificationSummary(snapshot),
 				...formatAwaitingIntegrationNextStep(snapshot),
 				...formatIntegrationSummary(snapshot),
+				"mode: mutating monitor; liveness recovery and integration may have run",
 			]);
 			return;
 		}

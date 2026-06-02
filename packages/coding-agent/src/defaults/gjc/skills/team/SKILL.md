@@ -185,24 +185,26 @@ While a team is running, keep checking live team state until terminal completion
 Minimum acceptable loop:
 
 ```bash
-sleep 30 && gjc team status <team-name>
+sleep 30 && gjc team monitor <team-name>
 ```
-The monitor path also performs bounded liveness recovery: expired task claims, stale heartbeat claims, and missing recorded worker panes are requeued instead of leaving work permanently `in_progress`.
+The mutating monitor path also performs bounded liveness recovery: expired task claims, stale heartbeat claims, and missing recorded worker panes are requeued instead of leaving work permanently `in_progress`.
 
 ## Operational Commands
 
 ```bash
 gjc team status <team-name>
+gjc team monitor <team-name>
 gjc team resume <team-name>
 gjc team shutdown <team-name>
 ```
 
 Semantics:
 
-- `status`: mutating monitor path; reads team snapshot, recovers expired/stale worker claims, applies pending worker worktree integration, and returns task counts, worker state, tmux target/pane evidence, `worker_lifecycle_by_id`, and `integration_by_worker`.
+- `status`: read-only snapshot path; it does not recover claims, replay notifications, integrate worker commits, or sync HUD state.
+- `monitor`: mutating monitor path; reads team snapshot, recovers expired/stale worker claims, applies pending worker worktree integration, replays notifications, syncs HUD state, and returns task counts, worker state, tmux target/pane evidence, `worker_lifecycle_by_id`, and `integration_by_worker`.
 - `resume`: mutating monitor path; performs the same liveness-recovery and integration-aware live snapshot for reconnect/inspection flows.
 - `list`: pure read path; lists known teams without integrating worker commits.
-- API/read-only snapshot operations are pure unless explicitly documented as a monitor/status path.
+- API/read-only snapshot operations are pure unless explicitly documented as a monitor path.
 - `claim-task`: mutating task path; before granting a new claim, it recovers expired claims and rejects claims from workers already classified as not live.
 - `shutdown`: writes per-worker graceful `shutdown-request.json`, moves lifecycle through `draining` to `stopped`, kills the recorded worker pane when it still belongs to the stored tmux target, removes clean created worktrees, marks worker runtime status stopped, and sets phase from task plus lifecycle evidence: `complete` only when all tasks have structured completion evidence and every worker has matching graceful shutdown lifecycle evidence; `failed` when tasks failed/blocked or legacy completed tasks lack evidence; and `cancelled` when work remains pending or in progress. It preserves `.gjc/state/team/<team>` as evidence.
 
@@ -370,7 +372,7 @@ When operating this skill, provide concrete progress evidence:
 
 1. Team started line (`Team started: <name>`)
 2. tmux target and worker pane id
-3. task state from `gjc team status <team>` or `.gjc/state/team/<team>/tasks/task-1.json`
+3. task state from read-only `gjc team status <team>`, mutating `gjc team monitor <team>`, or `.gjc/state/team/<team>/tasks/task-1.json`
 4. shutdown outcome (`phase=complete`, worker status `stopped`) when the run is terminal; incomplete shutdowns must report `phase=cancelled`/`failed`
 
 Do not claim success without file/pane evidence.

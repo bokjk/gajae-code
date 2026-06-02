@@ -231,6 +231,9 @@ export interface GjcTeamSnapshot {
 	notification_summary: GjcTeamNotificationSummary;
 	updated_at: string;
 }
+export interface GjcTeamSnapshotOptions {
+	reconcileNotifications?: boolean;
+}
 
 export interface GjcTeamStartOptions {
 	workerCount: number;
@@ -2394,6 +2397,7 @@ export async function readGjcTeamSnapshot(
 	teamName: string,
 	cwd = process.cwd(),
 	env: NodeJS.ProcessEnv = process.env,
+	options: GjcTeamSnapshotOptions = {},
 ): Promise<GjcTeamSnapshot> {
 	const dir = await findTeamDir(teamName, cwd, env);
 	const config = await readConfig(dir);
@@ -2409,7 +2413,10 @@ export async function readGjcTeamSnapshot(
 	for (const task of tasks) taskCounts[task.status] += 1;
 	const monitor = await readJsonFile<GjcTeamMonitorSnapshot>(monitorSnapshotPath(dir));
 	const workerLifecycleById = await readWorkerLifecycleById(dir, config);
-	const notificationSummary = await reconcileTeamNotifications(dir, config);
+	const notificationSummary =
+		options.reconcileNotifications === true
+			? await reconcileTeamNotifications(dir, config)
+			: summarizeNotifications(await listNotificationRecords(dir));
 	const phase = await resolveGjcTeamSnapshotPhase(dir, config, storedPhase, tasks, monitor);
 	return {
 		team_name: config.team_name,
@@ -2427,6 +2434,14 @@ export async function readGjcTeamSnapshot(
 		notification_summary: notificationSummary,
 		updated_at: config.updated_at,
 	};
+}
+export async function monitorGjcTeamSnapshot(
+	teamName: string,
+	cwd = process.cwd(),
+	env: NodeJS.ProcessEnv = process.env,
+): Promise<GjcTeamSnapshot> {
+	const snapshot = await monitorGjcTeam(teamName, cwd, env);
+	return snapshot;
 }
 function workerIntegrationFingerprint(head: string | null, classification: GjcWorkerCheckpointClassification): string {
 	return `${head ?? "no-head"}:${classification.kind}:${classification.files.join("\0")}`;

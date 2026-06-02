@@ -9,6 +9,7 @@ import {
 	type GjcTeamConfig,
 	listGjcTeams,
 	monitorGjcTeam,
+	monitorGjcTeamSnapshot,
 	parseTeamLaunchArgs,
 	readGjcTeamSnapshot,
 	readGjcTeamTask,
@@ -1026,6 +1027,46 @@ describe("native gjc team runtime", () => {
 		expect(retry.reason).toContain("worker_not_live:worker-1:stale_heartbeat");
 	});
 
+	it("keeps read-only status separate from mutating monitor recovery", async () => {
+		cleanupRoot = await fs.mkdtemp(path.join(os.tmpdir(), "gjc-team-runtime-"));
+		await startGjcTeam({
+			workerCount: 1,
+			agentType: "executor",
+			task: "Separate status and monitor",
+			teamName: "status-semantics-team",
+			cwd: cleanupRoot,
+			dryRun: true,
+			env: { PATH: "" },
+		});
+		const stateDir = path.join(cleanupRoot, ".gjc", "state", "team", "status-semantics-team");
+		const claim = await claimGjcTeamTask("status-semantics-team", "worker-1", cleanupRoot, { PATH: "" });
+		expect(claim.ok).toBe(true);
+		await Bun.write(
+			path.join(stateDir, "workers", "worker-1", "heartbeat.json"),
+			`${JSON.stringify(
+				{ pid: 0, last_turn_at: new Date(Date.now() - 60_000).toISOString(), turn_count: 1, alive: true },
+				null,
+				2,
+			)}\n`,
+		);
+
+		const statusSnapshot = await readGjcTeamSnapshot("status-semantics-team", cleanupRoot, {
+			PATH: "",
+			GJC_TEAM_HEARTBEAT_STALE_MS: "1",
+		});
+		expect(statusSnapshot.task_counts.in_progress).toBe(1);
+		expect(await Bun.file(path.join(stateDir, "claims", "task-1.json")).exists()).toBe(true);
+		expect(await readEvents(stateDir)).not.toContain("stale_heartbeat");
+
+		const monitorSnapshot = await monitorGjcTeamSnapshot("status-semantics-team", cleanupRoot, {
+			PATH: "",
+			GJC_TEAM_HEARTBEAT_STALE_MS: "1",
+		});
+		expect(monitorSnapshot.task_counts.pending).toBe(1);
+		expect(await Bun.file(path.join(stateDir, "claims", "task-1.json")).exists()).toBe(false);
+		expect(await readEvents(stateDir)).toContain("stale_heartbeat");
+	});
+
 	it("recovers missing-pane claims and marks the worker lifecycle failed", async () => {
 		cleanupRoot = await createGitRepo();
 		const fakeTmux = await createFakeTmuxBin(cleanupRoot);
@@ -1813,7 +1854,7 @@ describe("native gjc team runtime", () => {
 		expect(JSON.stringify(ledger)).toContain("cross_rebase");
 	});
 
-	it("pure team reads and list operations do not trigger integration, while command status and resume are wired to monitor", async () => {
+	it("pure team reads, status, and list operations stay read-only while monitor and resume can mutate", async () => {
 		cleanupRoot = await createGitRepo();
 		const fakeTmux = await createFakeTmuxBin(cleanupRoot);
 		const snapshot = await startGjcTeam({
@@ -1837,8 +1878,10 @@ describe("native gjc team runtime", () => {
 		expect(await Bun.file(path.join(cleanupRoot, "unintegrated.txt")).exists()).toBe(false);
 		expect(await Bun.file(path.join(snapshot.state_dir, "monitor-snapshot.json")).exists()).toBe(false);
 		const commandSource = await Bun.file(path.join(import.meta.dir, "../../src/commands/team.ts")).text();
-		expect(commandSource).toContain('action === "status" || action === "resume"');
-		expect(commandSource).toContain("monitorGjcTeam(teamName)");
+		expect(commandSource).toContain('action === "status"');
+		expect(commandSource).toContain("readGjcTeamSnapshot(teamName)");
+		expect(commandSource).toContain('action === "monitor" || action === "resume"');
+		expect(commandSource).toContain("monitorGjcTeamSnapshot(teamName)");
 		expect(commandSource).toContain("listGjcTeams()");
 		expect(commandSource).toContain("formatTaskCounts(snapshot.task_counts)");
 		expect(commandSource).toContain("formatIntegrationSummary(snapshot)");
