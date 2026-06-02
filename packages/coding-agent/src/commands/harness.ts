@@ -169,7 +169,7 @@ export default class Harness extends Command {
 				case "recover":
 				case "validate":
 				case "operate":
-					return await this.#pending(root, verb, input, flags.session);
+					return await this.#ownerVerbOrPending(root, verb, input, flags.session);
 				default:
 					throw new Error(`unknown_harness_verb:${verb}`);
 			}
@@ -186,6 +186,18 @@ export default class Harness extends Command {
 		const state = await loadState(root, sessionId);
 		writeJson(buildResponse(state, false, { completed: false, reason: "owner-not-live" }, false));
 		process.exitCode = 1;
+	}
+
+	/** Route an owner-backed verb to the live owner; fall back to a pending response when none. */
+	async #ownerVerbOrPending(
+		root: string,
+		verb: string,
+		input: Record<string, unknown>,
+		flagSession: string | undefined,
+	): Promise<void> {
+		const sessionId = flagSession ?? (typeof input.sessionId === "string" ? input.sessionId : undefined);
+		if (sessionId && (await this.#tryOwnerRoute(root, sessionId, verb, { ...input, sessionId }))) return;
+		return this.#pending(root, verb, input, flagSession);
 	}
 
 	/** Detached owner daemon (spawned by `start --detach`). Runs until retired or signalled. */

@@ -10,9 +10,23 @@
  *
  * Stateless `gjc harness` CLI calls reach the owner via {@link resolveOwner} + the endpoint.
  */
-import { randomUUID } from "node:crypto";
+
+import { execFileSync } from "node:child_process";
+import { randomBytes, randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
+import { classifyRecovery } from "./classifier";
 import { ControlServer, type EndpointRequest } from "./control-endpoint";
 import { defaultFinalizeChecks, type FinalizeChecks, runFinalize, type ValidationCommandSpec } from "./finalize";
+import { type OperateResult, operate } from "./operate";
+import { preserveDirtyWorktree } from "./preserve";
+import {
+	buildReceipt,
+	type ReceiptSubject,
+	requiresVanishBeforeAction,
+	type ValidationEvidence,
+	type VanishEvidence,
+	validateReceipt,
+} from "./receipts";
 import type { HarnessRpc } from "./rpc-adapter";
 import { singleFlightAccept } from "./rpc-adapter";
 import {
@@ -25,8 +39,16 @@ import {
 	type SessionLease,
 } from "./session-lease";
 import { buildStateView, nextAllowedActions } from "./state-machine";
-import { appendEvent, readEvents, readSessionState, sessionPaths, writeSessionState } from "./storage";
-import type { EventEnvelope, PrimitiveResponse, SessionState, Severity } from "./types";
+import {
+	appendEvent,
+	readEvents,
+	readSessionState,
+	sessionPaths,
+	writeReceiptImmutable,
+	writeSessionState,
+} from "./storage";
+import type { EventEnvelope, GitDelta, Observation, PrimitiveResponse, SessionState, Severity } from "./types";
+import { DEFAULT_RETRY_BUDGET } from "./types";
 
 export interface OwnerOptions {
 	root: string;
@@ -158,9 +180,156 @@ export class RuntimeOwner {
 				return this.#retire();
 			case "finalize":
 				return this.#finalize(req.input);
+			case "recover":
+				return this.#recover();
+			case "validate":
+				return this.#validate();
+			case "operate":
+				return this.#operate(req.input);
 			default:
 				return { ok: false, error: `owner_unsupported_verb:${req.verb}` };
 		}
+	}
+
+	async #observeGit(): Promise<Observation> {
+		const state = await this.#loadState();
+		const workspace = state.handle.workspace;
+		let streaming = false;
+		try {
+			streaming = (await this.#opts.rpc.getState()).isStreaming;
+		} catch {
+			streaming = false;
+		}
+		let gitDelta: GitDelta = "unknown";
+		let branch = state.handle.branch;
+		let deleted = false;
+		if (!existsSync(workspace)) {
+			deleted = true;
+		} else {
+			try {
+				branch = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
+					cwd: workspace,
+					encoding: "utf8",
+					stdio: ["ignore", "pipe", "ignore"],
+				}).trim();
+			} catch {
+				// keep prior branch
+			}
+			try {
+				const porcelain = execFileSync("git", ["status", "--porcelain"], {
+					cwd: workspace,
+					encoding: "utf8",
+					stdio: ["ignore", "pipe", "ignore"],
+				});
+				gitDelta = porcelain.trim().length > 0 ? "dirty" : "clean";
+			} catch {
+				gitDelta = "unknown";
+			}
+		}
+		return {
+			lifecycle: state.lifecycle,
+			ownerLive: true,
+			cwd: workspace,
+			branch,
+			gitDelta,
+			lastActivityAt: state.updatedAt,
+			observedSignals: streaming ? ["streaming"] : ["idle"],
+			risk: deleted ? "deleted-worktree" : "normal",
+		};
+	}
+
+	async #validate(): Promise<PrimitiveResponse> {
+		const state = await this.#loadState();
+		const checks = this.#finalizeChecks ?? defaultFinalizeChecks(state.handle.workspace);
+		const commit = await checks.resolveCommit();
+		const subject: ReceiptSubject = {
+			workspace: state.handle.workspace,
+			branch: state.handle.branch,
+			head: commit,
+			commit,
+		};
+		const validation: { name: string; valid: boolean; exitStatus: number }[] = [];
+		for (const spec of this.#validationCommands ?? []) {
+			const run = await checks.runValidation(spec);
+			const evidence: ValidationEvidence = {
+				command: spec.name,
+				exactCommand: run.exactCommand,
+				cwd: run.cwd,
+				exitStatus: run.exitStatus,
+				pass: run.pass,
+				commitUnderTest: commit,
+			};
+			const receipt = buildReceipt<ValidationEvidence>({
+				receiptId: `val-${Date.now()}-${randomBytes(4).toString("hex")}`,
+				sessionId: this.#opts.sessionId,
+				family: "validation",
+				source: "owner",
+				subject,
+				evidence,
+				valid: run.pass,
+			});
+			await writeReceiptImmutable(this.#opts.root, this.#opts.sessionId, "validation", receipt.receiptId, receipt);
+			validation.push({ name: spec.name, valid: validateReceipt(receipt).valid, exitStatus: run.exitStatus });
+		}
+		state.lifecycle = "validating";
+		state.updatedAt = new Date(this.#opts.clock ? this.#opts.clock() : Date.now()).toISOString();
+		await writeSessionState(this.#opts.root, state);
+		await this.#emit("info", "validated", { count: validation.length });
+		return this.#response(state, { validation });
+	}
+
+	async #recover(): Promise<PrimitiveResponse> {
+		const obs = await this.#observeGit();
+		const decision = classifyRecovery({ observation: obs, retryBudget: { ...DEFAULT_RETRY_BUDGET } });
+		let vanishReceiptId: string | null = null;
+		if (requiresVanishBeforeAction(decision.classification)) {
+			const dirty = obs.gitDelta === "dirty" || obs.gitDelta === "unknown";
+			const p = dirty ? preserveDirtyWorktree(obs.cwd) : null;
+			const evidence: VanishEvidence = {
+				classification: decision.classification,
+				gitDelta: obs.gitDelta,
+				gitStatusPorcelain: p
+					? `tracked:${p.trackedDiffSha256};untracked:${p.untrackedManifest.length}`
+					: obs.observedSignals.join(","),
+				untrackedManifest: p?.untrackedManifest ?? [],
+				preservation: p?.stashRef ? "stash" : "snapshot",
+				stashRef: p?.stashRef ?? null,
+				snapshotComplete: p?.snapshotComplete ?? true,
+				forbiddenActions: dirty ? ["restart-clean", "delete", "reset"] : [],
+			};
+			const receipt = buildReceipt<VanishEvidence>({
+				receiptId: `vanish-${Date.now()}-${randomBytes(4).toString("hex")}`,
+				sessionId: this.#opts.sessionId,
+				family: "vanish",
+				source: "owner",
+				subject: { workspace: obs.cwd, branch: obs.branch, head: null, commit: null },
+				evidence,
+			});
+			await writeReceiptImmutable(this.#opts.root, this.#opts.sessionId, "vanish", receipt.receiptId, receipt);
+			vanishReceiptId = receipt.receiptId;
+		}
+		const state = await this.#loadState();
+		await this.#emit(decision.severity, "recover_classified", { classification: decision.classification });
+		return this.#response(state, { decision, observation: obs, vanishReceiptId });
+	}
+
+	async #operate(input: Record<string, unknown>): Promise<PrimitiveResponse> {
+		const goal = typeof input.goal === "string" ? input.goal : "";
+		let state = await this.#loadState();
+		if (!goal) return this.#response(state, { error: "empty-goal" }, false);
+		const result: OperateResult = await operate(goal, {
+			root: this.#opts.root,
+			sessionId: this.#opts.sessionId,
+			workspace: state.handle.workspace,
+			branch: state.handle.branch ?? "",
+			rpc: this.#opts.rpc,
+			observe: () => this.#observeGit(),
+			finalizeChecks: this.#finalizeChecks ?? defaultFinalizeChecks(state.handle.workspace),
+			validationCommands: this.#validationCommands,
+			maxIterations: typeof input.maxIterations === "number" ? input.maxIterations : 5,
+		});
+		state = await this.#loadState();
+		return this.#response(state, { operate: result }, result.completed);
 	}
 
 	async #finalize(input: Record<string, unknown>): Promise<PrimitiveResponse> {
