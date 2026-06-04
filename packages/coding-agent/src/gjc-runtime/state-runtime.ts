@@ -26,7 +26,7 @@ import {
 } from "../skill-state/workflow-state-contract";
 import { renderCliWriteReceipt } from "./cli-write-receipt";
 import { renderStateGraph, type StateGraphFormat } from "./state-graph";
-import { migrateAndPersistLegacyState } from "./state-migrations";
+import { migrateAndPersistLegacyState, migrateWorkflowState } from "./state-migrations";
 import {
 	buildStateStatusSummary,
 	compactProjectStateJson,
@@ -358,7 +358,8 @@ async function readJsonFile(filePath: string): Promise<Record<string, unknown> |
 	} catch (error) {
 		const err = error as NodeJS.ErrnoException;
 		if (err.code === "ENOENT") return null;
-		throw new StateCommandError(1, `failed to read ${filePath}: ${err.message}`);
+		process.stderr.write(`WARNING: failed to read ${filePath}; ignoring corrupt state: ${err.message}\n`);
+		return null;
 	}
 }
 
@@ -368,7 +369,8 @@ async function readJsonValue(filePath: string): Promise<unknown | null> {
 	} catch (error) {
 		const err = error as NodeJS.ErrnoException;
 		if (err.code === "ENOENT") return null;
-		throw new StateCommandError(1, `failed to read ${filePath}: ${err.message}`);
+		process.stderr.write(`WARNING: failed to read ${filePath}; ignoring corrupt state: ${err.message}\n`);
+		return null;
 	}
 }
 
@@ -684,7 +686,7 @@ async function writeJsonAtomic(
 		fromPhase?: string;
 		toPhase?: string;
 	},
-): Promise<string | undefined> {
+): Promise<{ warning?: string; stamped: Record<string, unknown> }> {
 	const warning = options?.skill
 		? await warnAndAuditOutOfBandIfNeeded(cwd, filePath, options.skill, {
 				mutationId: options.mutationId,
@@ -707,7 +709,7 @@ async function writeJsonAtomic(
 			forced: options?.force ?? false,
 		},
 	});
-	return warning;
+	return { warning, stamped: (await readJsonFile(filePath)) ?? {} };
 }
 
 function parseFieldsFlag(args: readonly string[]): StateProjectionField[] | undefined {
@@ -1108,17 +1110,21 @@ async function handleWrite(
 			);
 		}
 	}
+	if (incomingPhase && toPhase && !isKnownWorkflowState(mode, toPhase) && !forced) {
+		throw new StateCommandError(2, `unknown ${mode} phase "${toPhase}"; use --force to bypass`);
+	}
 
 	const validation = validateWorkflowStateEnvelope(mode, merged);
 	if (!validation.valid) throw new StateCommandError(2, validation.error ?? `invalid ${mode} state envelope`);
 
-	const outOfBandWarning = await writeJsonAtomic(cwd, filePath, merged, "write", {
+	const { warning: outOfBandWarning, stamped } = await writeJsonAtomic(cwd, filePath, merged, "write", {
 		skill: mode,
 		mutationId,
 		force: forced,
 		fromPhase,
 		toPhase,
 	});
+	const stampedReceipt = isPlainObject(stamped.receipt) ? stamped.receipt : {};
 
 	const phase = typeof merged.current_phase === "string" ? merged.current_phase : undefined;
 	const active = merged.active !== false;
@@ -1132,9 +1138,9 @@ async function handleWrite(
 			state_path: filePath,
 			current_phase: phase,
 			active,
-			mutation_id: mutationId,
-			status: typeof receipt.status === "string" ? receipt.status : undefined,
-			content_sha256: receipt.content_sha256,
+			mutation_id: typeof stampedReceipt.mutation_id === "string" ? stampedReceipt.mutation_id : mutationId,
+			status: typeof stampedReceipt.status === "string" ? stampedReceipt.status : undefined,
+			content_sha256: stampedReceipt.content_sha256,
 		}),
 		...(outOfBandWarning ? { stderr: `${outOfBandWarning}\n` } : {}),
 	};
@@ -1175,13 +1181,14 @@ async function handleClear(
 		mutationId,
 	});
 	cleared.receipt = receipt;
-	const outOfBandWarning = await writeJsonAtomic(cwd, filePath, cleared, "clear", {
+	const { warning: outOfBandWarning, stamped } = await writeJsonAtomic(cwd, filePath, cleared, "clear", {
 		skill: mode,
 		mutationId,
 		force: hasFlag(args, "--force"),
 		fromPhase: typeof existing.current_phase === "string" ? existing.current_phase : undefined,
 		toPhase: "complete",
 	});
+	const stampedReceipt = isPlainObject(stamped.receipt) ? stamped.receipt : {};
 
 	await syncWorkflowSkillState({
 		cwd,
@@ -1201,8 +1208,9 @@ async function handleClear(
 			state_path: filePath,
 			active: false,
 			current_phase: typeof cleared.current_phase === "string" ? cleared.current_phase : undefined,
-			mutation_id: mutationId,
-			status: typeof receipt.status === "string" ? receipt.status : undefined,
+			mutation_id: typeof stampedReceipt.mutation_id === "string" ? stampedReceipt.mutation_id : mutationId,
+			status: typeof stampedReceipt.status === "string" ? stampedReceipt.status : undefined,
+			content_sha256: stampedReceipt.content_sha256,
 		}),
 		...(outOfBandWarning ? { stderr: `${outOfBandWarning}\n` } : {}),
 	};
@@ -1284,10 +1292,12 @@ async function handleHandoff(
 	});
 
 	const calleeInitial = initialPhaseForSkill(callee);
+	const normalizedCaller = migrateWorkflowState(existingCaller, caller).state;
+	const normalizedCallee = migrateWorkflowState(existingCallee, callee).state;
 	const mergedCalleeState: Record<string, unknown> = {
-		...existingCallee,
+		...normalizedCallee,
 		skill: callee,
-		version: typeof existingCallee.version === "number" ? existingCallee.version : 1,
+		version: WORKFLOW_STATE_VERSION,
 		active: true,
 		current_phase: calleeInitial,
 		handoff_from: caller,
@@ -1299,8 +1309,9 @@ async function handleHandoff(
 		mergedCalleeState.session_id = sessionId;
 	}
 	const mergedCallerState: Record<string, unknown> = {
-		...existingCaller,
+		...normalizedCaller,
 		skill: caller,
+		version: WORKFLOW_STATE_VERSION,
 		active: false,
 		current_phase: "handoff",
 		handoff_to: callee,
@@ -1325,26 +1336,29 @@ async function handleHandoff(
 	// root aggregate. strict:true on the active-state read tolerates ENOENT
 	// only; corrupt JSON / IO failures propagate as non-zero CLI status.
 	const force = hasFlag(args, "--force");
-	const warnings = [
-		await writeJsonAtomic(cwd, calleePath, mergedCalleeState, "handoff", {
-			skill: callee,
-			mutationId,
-			force,
-			fromPhase: typeof existingCallee.current_phase === "string" ? existingCallee.current_phase : undefined,
-			toPhase: calleeInitial,
-		}),
-		await updateWorkflowTransactionJournal(cwd, mutationId, { steps: ["callee-mode-state"] }).then(() => undefined),
-		await writeJsonAtomic(cwd, callerPath, mergedCallerState, "handoff", {
-			skill: caller,
-			mutationId,
-			force,
-			fromPhase: typeof existingCaller.current_phase === "string" ? existingCaller.current_phase : undefined,
-			toPhase: "handoff",
-		}),
-		await updateWorkflowTransactionJournal(cwd, mutationId, {
-			steps: ["callee-mode-state", "caller-mode-state"],
-		}).then(() => undefined),
-	].filter((warning): warning is string => typeof warning === "string");
+	const calleeWrite = await writeJsonAtomic(cwd, calleePath, mergedCalleeState, "handoff", {
+		skill: callee,
+		mutationId,
+		force,
+		fromPhase: typeof existingCallee.current_phase === "string" ? existingCallee.current_phase : undefined,
+		toPhase: calleeInitial,
+	});
+	await updateWorkflowTransactionJournal(cwd, mutationId, { steps: ["callee-mode-state"] });
+	const callerWrite = await writeJsonAtomic(cwd, callerPath, mergedCallerState, "handoff", {
+		skill: caller,
+		mutationId,
+		force,
+		fromPhase: typeof existingCaller.current_phase === "string" ? existingCaller.current_phase : undefined,
+		toPhase: "handoff",
+	});
+	await updateWorkflowTransactionJournal(cwd, mutationId, {
+		steps: ["callee-mode-state", "caller-mode-state"],
+	});
+	const warnings = [calleeWrite.warning, callerWrite.warning].filter(
+		(warning): warning is string => typeof warning === "string",
+	);
+	const stampedCallerReceipt = isPlainObject(callerWrite.stamped.receipt) ? callerWrite.stamped.receipt : {};
+	const stampedCalleeReceipt = isPlainObject(calleeWrite.stamped.receipt) ? calleeWrite.stamped.receipt : {};
 	for (const warning of warnings) process.stderr.write(`${warning}\n`);
 	if (process.env.GJC_STATE_HANDOFF_FAIL_AFTER_CALLER === mutationId) {
 		throw new StateCommandError(1, `injected handoff failure after caller write for ${mutationId}`);
@@ -1399,8 +1413,16 @@ async function handleHandoff(
 				to: mergedCalleeState.current_phase,
 			},
 			receipts: {
-				from: callerReceipt,
-				to: calleeReceipt,
+				from: {
+					mutation_id: stampedCallerReceipt.mutation_id,
+					status: stampedCallerReceipt.status,
+					content_sha256: stampedCallerReceipt.content_sha256,
+				},
+				to: {
+					mutation_id: stampedCalleeReceipt.mutation_id,
+					status: stampedCalleeReceipt.status,
+					content_sha256: stampedCalleeReceipt.content_sha256,
+				},
 			},
 			paths: {
 				from: callerPath,

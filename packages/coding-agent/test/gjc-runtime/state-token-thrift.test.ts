@@ -68,7 +68,14 @@ describe("GJC state token thrift", () => {
 	it("projects requested fields in requested order", async () => {
 		const root = await tempDir();
 		await runNativeStateCommand(
-			["write", "--mode", "ralplan", "--input", JSON.stringify({ current_phase: "approval", run_id: "r1" })],
+			[
+				"write",
+				"--mode",
+				"ralplan",
+				"--force",
+				"--input",
+				JSON.stringify({ current_phase: "approval", run_id: "r1" }),
+			],
 			root,
 		);
 
@@ -148,7 +155,7 @@ describe("GJC state token thrift", () => {
 		const root = await tempDir();
 		for (let index = 0; index < 5; index += 1) {
 			await runNativeStateCommand(
-				["write", "--mode", "ralplan", "--input", JSON.stringify({ current_phase: `phase-${index}` })],
+				["write", "--mode", "ralplan", "--force", "--input", JSON.stringify({ current_phase: `phase-${index}` })],
 				root,
 			);
 		}

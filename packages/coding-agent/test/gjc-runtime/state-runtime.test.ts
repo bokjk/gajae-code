@@ -49,6 +49,20 @@ describe("native gjc state runtime", () => {
 		expect(envelopeState(result.stdout)).toEqual({});
 	});
 
+	it("reads corrupt mode-state fail-open as empty state", async () => {
+		const root = await tempDir();
+		const stateDir = path.join(root, ".gjc", "state");
+		await fs.mkdir(stateDir, { recursive: true });
+		await fs.writeFile(path.join(stateDir, "ralplan-state.json"), "{not json");
+
+		const read = await runNativeStateCommand(["read", "--mode", "ralplan", "--json"], root);
+		expect(read.status).toBe(0);
+		expect(envelopeState(read.stdout)).toEqual({});
+
+		const status = await runNativeStateCommand(["status", "--mode", "ralplan", "--json"], root);
+		expect(status.status).toBe(0);
+	});
+
 	it('supports the legacy --input \'{"mode":"..."}\' payload shape for read', async () => {
 		const root = await tempDir();
 		await runNativeStateCommand(
@@ -382,16 +396,16 @@ describe("native gjc state runtime", () => {
 
 		// Bundled prompt shape: gjc state write --input '<json>' (no --mode)
 		const result = await runNativeStateCommand(
-			["write", "--input", JSON.stringify({ phase: "approval", active: true })],
+			["write", "--input", JSON.stringify({ phase: "architect", active: true })],
 			root,
 		);
 
 		expect(result.status).toBe(0);
 		const parsed = JSON.parse(result.stdout ?? "{}") as Record<string, unknown>;
-		expect(parsed).toMatchObject({ ok: true, skill: "ralplan", current_phase: "approval" });
+		expect(parsed).toMatchObject({ ok: true, skill: "ralplan", current_phase: "architect" });
 		expect(parsed.state).toBeUndefined();
 		const onDisk = JSON.parse(await fs.readFile(path.join(stateDir, "ralplan-state.json"), "utf-8"));
-		expect(onDisk.current_phase).toBe("approval");
+		expect(onDisk.current_phase).toBe("architect");
 	});
 
 	it("infers the active workflow for clear too", async () => {

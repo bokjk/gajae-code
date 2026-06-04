@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterAll, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -12,6 +12,8 @@ import {
 	type GjcTeamSnapshot,
 	persistGjcTeamModeStateSummary,
 } from "@gajae-code/coding-agent/gjc-runtime/team-runtime";
+import { recordSkillActivation } from "@gajae-code/coding-agent/hooks/skill-state";
+import { WORKFLOW_STATE_VERSION } from "@gajae-code/coding-agent/skill-state/workflow-state-contract";
 
 const tempRoots: string[] = [];
 
@@ -21,7 +23,7 @@ async function tempDir(): Promise<string> {
 	return dir;
 }
 
-afterEach(async () => {
+afterAll(async () => {
 	await Promise.all(tempRoots.splice(0).map(dir => fs.rm(dir, { recursive: true, force: true })));
 });
 
@@ -30,33 +32,57 @@ async function readJson(filePath: string): Promise<Record<string, unknown>> {
 }
 
 async function expectPersistedEnvelope(filePath: string): Promise<void> {
-	const parsed = RequiredOnWriteEnvelopeSchema.safeParse(await readJson(filePath));
+	const value = await readJson(filePath);
+	const parsed = RequiredOnWriteEnvelopeSchema.safeParse(value);
 	expect(parsed.success).toBe(true);
+	expect(value.version).toBe(WORKFLOW_STATE_VERSION);
 }
 
 describe("workflow state writer drift guard", () => {
 	it("persists required-on-write envelopes for state write, clear, and handoff", async () => {
 		const root = await tempDir();
-		const deepPath = path.join(root, ".gjc", "state", "deep-interview-state.json");
-		const ralplanPath = path.join(root, ".gjc", "state", "ralplan-state.json");
+		const sessionId = "drift-session";
+		const deepPath = path.join(root, ".gjc", "state", "sessions", sessionId, "deep-interview-state.json");
+		const ralplanPath = path.join(root, ".gjc", "state", "sessions", sessionId, "ralplan-state.json");
 
 		const write = await runNativeStateCommand(
-			["write", "--mode", "deep-interview", "--input", JSON.stringify({ current_phase: "interviewing" })],
+			[
+				"write",
+				"--mode",
+				"deep-interview",
+				"--session-id",
+				sessionId,
+				"--input",
+				JSON.stringify({ current_phase: "interviewing" }),
+				"--json",
+			],
 			root,
 		);
 		expect(write.status).toBe(0);
 		await expectPersistedEnvelope(deepPath);
 
-		const clear = await runNativeStateCommand(["clear", "--mode", "deep-interview"], root);
+		const clear = await runNativeStateCommand(["clear", "--mode", "deep-interview", "--session-id", sessionId], root);
 		expect(clear.status).toBe(0);
 		await expectPersistedEnvelope(deepPath);
 
 		const seed = await runNativeStateCommand(
-			["write", "--mode", "deep-interview", "--input", JSON.stringify({ current_phase: "handoff" }), "--force"],
+			[
+				"write",
+				"--mode",
+				"deep-interview",
+				"--session-id",
+				sessionId,
+				"--input",
+				JSON.stringify({ current_phase: "handoff" }),
+				"--force",
+			],
 			root,
 		);
 		expect(seed.status).toBe(0);
-		const handoff = await runNativeStateCommand(["handoff", "--mode", "deep-interview", "--to", "ralplan"], root);
+		const handoff = await runNativeStateCommand(
+			["handoff", "--mode", "deep-interview", "--session-id", sessionId, "--to", "ralplan"],
+			root,
+		);
 		expect(handoff.status).toBe(0);
 		await expectPersistedEnvelope(deepPath);
 		await expectPersistedEnvelope(ralplanPath);
@@ -67,6 +93,69 @@ describe("workflow state writer drift guard", () => {
 		const result = await runNativeRalplanCommand(["--json", "scope this change"], root);
 		expect(result.status).toBe(0);
 		await expectPersistedEnvelope(path.join(root, ".gjc", "state", "ralplan-state.json"));
+	});
+
+	it("persists required-on-write envelope for hook initialized mode-state", async () => {
+		const root = await tempDir();
+		const state = await recordSkillActivation({
+			cwd: root,
+			text: "$deep-interview clarify this",
+			sessionId: "hook-session",
+			threadId: "hook-thread",
+			nowIso: "2026-01-01T00:00:00.000Z",
+		});
+		expect(state?.initialized_state_path).toBe(
+			path.join(root, ".gjc", "state", "sessions", "hook-session", "deep-interview-state.json"),
+		);
+		await expectPersistedEnvelope(state?.initialized_state_path ?? "");
+	});
+
+	it("persists required-on-write v2 envelope for ralplan persist-run-id from legacy v1 state", async () => {
+		const root = await tempDir();
+		const statePath = path.join(root, ".gjc", "state", "ralplan-state.json");
+		await fs.mkdir(path.dirname(statePath), { recursive: true });
+		await fs.writeFile(
+			statePath,
+			`${JSON.stringify({ version: 1, skill: "ralplan", active: true, current_phase: "planning", updated_at: "2026-01-01T00:00:00.000Z" })}\n`,
+			"utf-8",
+		);
+
+		const result = await runNativeRalplanCommand(
+			["--write", "--stage", "planner", "--stage_n", "1", "--artifact", "# Plan", "--run-id", "legacy-run"],
+			root,
+		);
+		expect(result.status).toBe(0);
+		await expectPersistedEnvelope(statePath);
+	});
+
+	it("persists required-on-write v2 envelope for ralplan planner-state from legacy v1 state", async () => {
+		const root = await tempDir();
+		const statePath = path.join(root, ".gjc", "state", "ralplan-state.json");
+		await fs.mkdir(path.dirname(statePath), { recursive: true });
+		await fs.writeFile(
+			statePath,
+			`${JSON.stringify({ version: 1, skill: "ralplan", active: true, current_phase: "planning", updated_at: "2026-01-01T00:00:00.000Z", run_id: "legacy-planner" })}\n`,
+			"utf-8",
+		);
+
+		const result = await runNativeRalplanCommand(
+			[
+				"--write",
+				"--stage",
+				"planner",
+				"--stage_n",
+				"1",
+				"--artifact",
+				"# Plan",
+				"--planner-id",
+				"0-Planner",
+				"--planner-resumable",
+				"true",
+			],
+			root,
+		);
+		expect(result.status).toBe(0);
+		await expectPersistedEnvelope(statePath);
 	});
 
 	it("persists required-on-write envelope for deep-interview seed and spec handoff state", async () => {

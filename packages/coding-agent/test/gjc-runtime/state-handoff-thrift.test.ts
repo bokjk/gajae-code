@@ -166,7 +166,7 @@ describe("CONSUMER/KEY-FIELD MATRIX for compact handoff payloads", () => {
 		assertKeys(statePayload, ["ok", "from", "to", "handoff_at", "phases", "receipts", "paths"]);
 		expect(statePayload.state).toBeUndefined();
 		expect(scrub(stateHandoff.stdout ?? "")).toMatchInlineSnapshot(`
-			"{"ok":true,"from":"deep-interview","to":"ralplan","handoff_at":"<iso>","phases":{"from":"handoff","to":"planner"},"receipts":{"from":{"version":1,"skill":"deep-interview","owner":"gjc-state-cli","command":"gjc state deep-interview handoff --to ralplan","state_path":"/tmp/SCRUBBED","storage_path":"/tmp/SCRUBBED","mutated_at":"<iso>","fresh_until":"<iso>","status":"fresh","mutation_id":"deep-interview:handoff:ralplan:<iso>"},"to":{"version":1,"skill":"ralplan","owner":"gjc-state-cli","command":"gjc state deep-interview handoff --to ralplan","state_path":"/tmp/SCRUBBED","storage_path":"/tmp/SCRUBBED","mutated_at":"<iso>","fresh_until":"<iso>","status":"fresh","mutation_id":"deep-interview:handoff:ralplan:<iso>"}},"paths":{"from":"/tmp/SCRUBBED","to":"/tmp/SCRUBBED","active_state":"/tmp/SCRUBBED"}}
+			"{"ok":true,"from":"deep-interview","to":"ralplan","handoff_at":"<iso>","phases":{"from":"handoff","to":"planner"},"receipts":{"from":{"mutation_id":"deep-interview:handoff:ralplan:<iso>","status":"fresh","content_sha256":{"algorithm":"sha256","value":"<sha256>","covered_path":"/tmp/SCRUBBED","computed_at":"<iso>"}},"to":{"mutation_id":"deep-interview:handoff:ralplan:<iso>","status":"fresh","content_sha256":{"algorithm":"sha256","value":"<sha256>","covered_path":"/tmp/SCRUBBED","computed_at":"<iso>"}}},"paths":{"from":"/tmp/SCRUBBED","to":"/tmp/SCRUBBED","active_state":"/tmp/SCRUBBED"}}
 			"
 			`);
 

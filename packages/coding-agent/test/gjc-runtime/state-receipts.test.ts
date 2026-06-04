@@ -41,6 +41,12 @@ function expectValidReceipt(state: Record<string, unknown>, skill: string): void
 	expect(Number.isNaN(Date.parse(receipt?.mutated_at as string))).toBe(false);
 }
 
+function expectCliChecksum(payload: Record<string, unknown>): void {
+	const checksum = payload.content_sha256 as Record<string, unknown> | undefined;
+	expect(checksum).toMatchObject({ algorithm: "sha256" });
+	expect(typeof checksum?.value).toBe("string");
+}
+
 function expectAuditEntry(entry: Record<string, unknown> | undefined, verb: "write" | "clear" | "handoff"): void {
 	expect(entry).toMatchObject({
 		category: "state",
@@ -69,6 +75,7 @@ describe("G5 gjc state receipts", () => {
 			const writePayload = JSON.parse(write.stdout ?? "{}") as Record<string, unknown>;
 			expect(writePayload).toMatchObject({ ok: true, skill: "ralplan", current_phase: "planner", active: true });
 			expect(writePayload.state).toBeUndefined();
+			expectCliChecksum(writePayload);
 			const statePath = path.join(cwd, ".gjc/state/ralplan-state.json");
 			expectValidReceipt(await readJson(statePath), "ralplan");
 			expectAuditEntry(findAuditEntry(await readAuditEntries(cwd), "write"), "write");
@@ -78,6 +85,7 @@ describe("G5 gjc state receipts", () => {
 			const clearPayload = JSON.parse(clear.stdout ?? "{}") as Record<string, unknown>;
 			expect(clearPayload).toMatchObject({ ok: true, skill: "ralplan", current_phase: "complete", active: false });
 			expect(clearPayload.state).toBeUndefined();
+			expectCliChecksum(clearPayload);
 			expectValidReceipt(await readJson(statePath), "ralplan");
 			expectAuditEntry(findAuditEntry(await readAuditEntries(cwd), "clear"), "clear");
 
@@ -93,6 +101,10 @@ describe("G5 gjc state receipts", () => {
 			const handoffPayload = JSON.parse(handoff.stdout ?? "{}") as Record<string, unknown>;
 			expect(handoffPayload).toMatchObject({ ok: true, from: "deep-interview", to: "ralplan" });
 			expect(handoffPayload.state).toBeUndefined();
+			const handoffReceipts = handoffPayload.receipts as Record<string, Record<string, unknown>>;
+			expectCliChecksum(handoffReceipts.from);
+			expectCliChecksum(handoffReceipts.to);
+			expect(handoffReceipts.from.version).toBeUndefined();
 			expectValidReceipt(await readJson(path.join(cwd, ".gjc/state/deep-interview-state.json")), "deep-interview");
 			expectValidReceipt(await readJson(statePath), "ralplan");
 

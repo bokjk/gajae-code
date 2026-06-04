@@ -69,7 +69,7 @@ describe("state-schema (A1)", () => {
 		};
 		const ok = RequiredOnWriteEnvelopeSchema.safeParse({
 			skill: "ralplan",
-			version: 1,
+			version: 2,
 			updated_at: "2026-01-01T00:00:00.000Z",
 			current_phase: "planner",
 			active: true,
@@ -79,13 +79,22 @@ describe("state-schema (A1)", () => {
 		// missing content_sha256 -> rejected (write fail-closed depends on this)
 		const noChecksum = RequiredOnWriteEnvelopeSchema.safeParse({
 			skill: "ralplan",
-			version: 1,
+			version: 2,
 			updated_at: "2026-01-01T00:00:00.000Z",
 			current_phase: "planner",
 			active: true,
 			receipt: { ...validReceipt, content_sha256: undefined },
 		});
 		expect(noChecksum.success).toBe(false);
+		const v1 = RequiredOnWriteEnvelopeSchema.safeParse({
+			skill: "ralplan",
+			version: 1,
+			updated_at: "2026-01-01T00:00:00.000Z",
+			current_phase: "planner",
+			active: true,
+			receipt: validReceipt,
+		});
+		expect(v1.success).toBe(false);
 		// missing top-level required field -> rejected
 		expect(RequiredOnWriteEnvelopeSchema.safeParse({ skill: "ralplan" }).success).toBe(false);
 	});

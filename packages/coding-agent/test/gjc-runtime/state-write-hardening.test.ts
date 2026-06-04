@@ -71,12 +71,31 @@ describe("gjc state write hardening", () => {
 		expect(receiptFrom(result.stdout).current_phase).toBe("handoff");
 	});
 
-	it("allows unknown legacy target phases", async () => {
+	it("rejects unknown legacy target phases unless forced", async () => {
 		const root = await tempDir();
 		await writeState(root, "ralplan", { current_phase: "planner" });
-		const result = await writeState(root, "ralplan", { current_phase: "legacy-custom" });
+		const rejected = await writeState(root, "ralplan", { current_phase: "legacy-custom" });
+		expect(rejected.status).not.toBe(0);
+		expect(rejected.stderr).toContain('unknown ralplan phase "legacy-custom"');
+
+		const forced = await writeState(root, "ralplan", { current_phase: "legacy-custom" }, ["--force"]);
+		expect(forced.status).toBe(0);
+		expect(receiptFrom(forced.stdout).current_phase).toBe("legacy-custom");
+	});
+
+	it("reads unknown legacy phases fail-open", async () => {
+		const root = await tempDir();
+		const stateDir = path.join(root, ".gjc", "state");
+		await fs.mkdir(stateDir, { recursive: true });
+		await fs.writeFile(
+			path.join(stateDir, "ralplan-state.json"),
+			JSON.stringify({ skill: "ralplan", version: 1, active: true, current_phase: "legacy-custom" }),
+		);
+		const result = await runNativeStateCommand(["read", "--mode", "ralplan", "--json"], root);
 		expect(result.status).toBe(0);
-		expect(receiptFrom(result.stdout).current_phase).toBe("legacy-custom");
+		expect((JSON.parse(result.stdout ?? "{}") as Record<string, unknown>).state).toMatchObject({
+			current_phase: "legacy-custom",
+		});
 	});
 
 	it("allows seeds with no prior phase", async () => {

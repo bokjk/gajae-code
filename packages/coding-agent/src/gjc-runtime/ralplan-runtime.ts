@@ -6,6 +6,7 @@ import { buildRalplanHudSummary } from "../skill-state/workflow-hud";
 import { WORKFLOW_STATE_VERSION } from "../skill-state/workflow-state-contract";
 import { renderCliWriteReceipt } from "./cli-write-receipt";
 import { isRestrictedRoleAgentBash } from "./restricted-role-agent-bash";
+import { migrateWorkflowState } from "./state-migrations";
 import { appendJsonl, writeArtifact, writeWorkflowEnvelopeAtomic } from "./state-writer";
 
 /**
@@ -193,7 +194,7 @@ async function persistActiveRunId(cwd: string, sessionId: string | undefined, ru
 	if (typeof existing.skill !== "string") existing.skill = "ralplan";
 	if (typeof existing.active !== "boolean") existing.active = true;
 	if (typeof existing.current_phase !== "string") existing.current_phase = "planner";
-	if (typeof existing.version !== "number") existing.version = WORKFLOW_STATE_VERSION;
+	existing = migrateWorkflowState(existing, "ralplan").state;
 	existing.updated_at = new Date().toISOString();
 	await writeWorkflowEnvelopeAtomic(statePath, existing, {
 		cwd,
@@ -341,7 +342,7 @@ async function applyPlannerStateUpdate(
 	if (typeof existing.skill !== "string") existing.skill = "ralplan";
 	if (typeof existing.active !== "boolean") existing.active = true;
 	if (typeof existing.current_phase !== "string") existing.current_phase = "planner";
-	if (typeof existing.version !== "number") existing.version = WORKFLOW_STATE_VERSION;
+	existing = migrateWorkflowState(existing, "ralplan").state;
 	existing.updated_at = new Date().toISOString();
 	await writeWorkflowEnvelopeAtomic(statePath, existing, {
 		cwd,

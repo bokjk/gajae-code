@@ -87,6 +87,35 @@ describe("gjc state handoff", () => {
 		});
 	});
 
+	it("normalizes legacy caller and callee envelopes to v2 during handoff", async () => {
+		await withTempCwd(async cwd => {
+			const callerPath = path.join(cwd, ".gjc/state/deep-interview-state.json");
+			const calleePath = path.join(cwd, ".gjc/state/ralplan-state.json");
+			await writeJson(callerPath, {
+				skill: "deep-interview",
+				version: 1,
+				active: true,
+				current_phase: "interviewing",
+			});
+			await writeJson(calleePath, {
+				skill: "ralplan",
+				active: false,
+				current_phase: "planner",
+			});
+
+			const result = await runNativeStateCommand(
+				["handoff", "--mode", "deep-interview", "--to", "ralplan", "--json"],
+				cwd,
+			);
+
+			expect(result.status).toBe(0);
+			const caller = await readJson(callerPath);
+			const callee = await readJson(calleePath);
+			expect(caller?.version).toBe(2);
+			expect(callee?.version).toBe(2);
+		});
+	});
+
 	it("writes callee mode-state before caller mode-state (HUD-coherent ordering)", async () => {
 		await withTempCwd(async cwd => {
 			const callerPath = path.join(cwd, ".gjc/state/deep-interview-state.json");

@@ -1,7 +1,7 @@
 import * as path from "node:path";
 import type { SkillDiscoverySettings } from "../config/skill-settings-defaults";
 import { ModeStateSchema, SkillActiveStateSchema } from "../gjc-runtime/state-schema";
-import { writeJsonAtomic } from "../gjc-runtime/state-writer";
+import { writeJsonAtomic, writeWorkflowEnvelopeAtomic } from "../gjc-runtime/state-writer";
 import { isUltragoalBypassPrompt, readUltragoalVerificationState } from "../gjc-runtime/ultragoal-guard";
 import { buildSessionContext, loadEntriesFromFile, type SessionEntry } from "../session/session-manager";
 import {
@@ -9,6 +9,7 @@ import {
 	type SkillActiveEntry,
 	type SkillActiveState,
 } from "../skill-state/active-state";
+import { WORKFLOW_STATE_VERSION } from "../skill-state/workflow-state-contract";
 import {
 	compareSkillKeywordMatches,
 	GJC_SKILL_KEYWORD_DEFINITIONS,
@@ -244,7 +245,10 @@ async function readValidatedJsonFile<T>(
 		return null;
 	}
 	const parsed = schema.safeParse(value);
-	if (!parsed.success) warnInvalidState(kind, filePath, parsed.error.message);
+	if (!parsed.success) {
+		warnInvalidState(kind, filePath, parsed.error.message);
+		return null;
+	}
 	return value;
 }
 
@@ -335,6 +339,7 @@ export async function recordSkillActivation(input: RecordSkillActivationInput): 
 	};
 	const modeState: ModeState = {
 		active: true,
+		version: WORKFLOW_STATE_VERSION,
 		current_phase: phase,
 		skill: match.skill,
 		cwd: input.cwd,
@@ -348,7 +353,17 @@ export async function recordSkillActivation(input: RecordSkillActivationInput): 
 		modeState.threshold_source = "default";
 	}
 
-	await writeJsonFile(initializedStatePath, modeState, input.cwd);
+	await writeWorkflowEnvelopeAtomic(initializedStatePath, modeState, {
+		cwd: input.cwd,
+		receipt: {
+			cwd: input.cwd,
+			skill: match.skill,
+			owner: "gjc-hook",
+			command: "gjc hook recordSkillActivation",
+			sessionId: input.sessionId,
+		},
+		audit: { category: "state", verb: "write", owner: "gjc-hook", skill: match.skill },
+	});
 	await writeJsonFile(skillStatePath(resolvedStateDir, input.sessionId), state, input.cwd);
 	if (!input.sessionId) return state;
 	await writeJsonFile(skillStatePath(resolvedStateDir), state, input.cwd);

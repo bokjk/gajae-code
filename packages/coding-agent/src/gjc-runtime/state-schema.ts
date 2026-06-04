@@ -90,7 +90,8 @@ export const RequiredWorkflowStateReceiptSchema = z
 export const RequiredOnWriteEnvelopeSchema = z
 	.object({
 		skill: skillEnum,
-		version: z.number(),
+		// Keep this literal in sync with WORKFLOW_STATE_VERSION; importing it here creates a runtime cycle.
+		version: z.literal(2),
 		updated_at: z.string(),
 		current_phase: z.string(),
 		active: z.boolean(),
