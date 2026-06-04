@@ -21,7 +21,7 @@ describe("native gjc ralplan runtime — consensus handoff", () => {
 		const root = await tempDir();
 		const result = await runNativeRalplanCommand(["--interactive", "--deliberate", "make state native"], root);
 		expect(result.status).toBe(0);
-		expect(result.stdout).toContain("Seeded ralplan deliberate run (interactive)");
+		expect(result.stdout).toContain("ralplan seed run_id=");
 		const state = JSON.parse(await fs.readFile(path.join(root, ".gjc", "state", "ralplan-state.json"), "utf-8"));
 		expect(state.mode).toBe("deliberate");
 		expect(state.interactive).toBe(true);

@@ -1356,17 +1356,24 @@ async function handleHandoff(
 
 	return {
 		status: 0,
-		stdout: `${JSON.stringify(
-			{
-				from: caller,
-				to: callee,
-				handoff_at: handoffAt,
-				caller_state: mergedCallerState,
-				callee_state: mergedCalleeState,
+		stdout: `${JSON.stringify({
+			from: caller,
+			to: callee,
+			handoff_at: handoffAt,
+			phases: {
+				from: mergedCallerState.current_phase,
+				to: mergedCalleeState.current_phase,
 			},
-			null,
-			2,
-		)}\n`,
+			receipts: {
+				from: callerReceipt,
+				to: calleeReceipt,
+			},
+			paths: {
+				from: callerPath,
+				to: calleePath,
+				active_state: activeStateFile(cwd, sessionId),
+			},
+		})}\n`,
 	};
 }
 

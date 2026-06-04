@@ -549,10 +549,14 @@ async function handleSpecWrite(args: readonly string[], cwd: string): Promise<De
 	}
 
 	const stdout = resolved.json
-		? `${JSON.stringify(summary, null, 2)}\n`
+		? `${JSON.stringify(summary)}\n`
 		: [
-				`Persisted deep-interview ${persisted.stage} spec at ${persisted.path}.`,
-				shouldHandoff ? "Handed off deep-interview to ralplan (deliberate)." : undefined,
+				`deep-interview spec_path=${persisted.path}`,
+				`sha=${persisted.sha256}`,
+				`state_path=${persisted.statePath}`,
+				shouldHandoff
+					? `handoff=ralplan run_id=${summary.handoff?.run_id ?? ""} state_path=${summary.handoff?.state_path ?? ""}`
+					: undefined,
 				"",
 			]
 				.filter((line): line is string => Boolean(line))
@@ -591,14 +595,14 @@ export async function runNativeDeepInterviewCommand(
 			idea: resolved.idea,
 			language: resolved.language,
 			state_path: statePath,
-			handoff: "Run `/skill:deep-interview` inside the GJC agent to drive the Socratic interview loop.",
+			handoff: "/skill:deep-interview",
 		};
 		const stdout = resolved.json
-			? `${JSON.stringify(summary, null, 2)}\n`
+			? `${JSON.stringify(summary)}\n`
 			: [
-					`Seeded deep-interview ${resolved.resolution} run at ${statePath}.`,
-					`Threshold: ${(resolved.threshold * 100).toFixed(0)}% (source: ${resolved.thresholdSource}).`,
-					"Run `/skill:deep-interview` inside the GJC agent to execute the interview.",
+					`deep-interview seed state_path=${statePath}`,
+					`resolution=${resolved.resolution} threshold=${resolved.threshold} threshold_source=${resolved.thresholdSource}`,
+					"handoff=/skill:deep-interview",
 					"",
 				].join("\n");
 		return { status: 0, stdout };

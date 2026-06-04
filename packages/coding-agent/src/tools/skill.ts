@@ -138,7 +138,12 @@ export class SkillTool implements AgentTool<typeof skillSchema, SkillToolDetails
 				{ triggerTurn: false },
 			);
 
-			const summary = args ? `Handed off to /skill:${skill.name} ${args}.` : `Handed off to /skill:${skill.name}.`;
+			const summary = JSON.stringify({
+				callee: skill.name,
+				path: skill.filePath,
+				args: args || undefined,
+				lineCount: built.details.lineCount,
+			});
 			return {
 				content: [{ type: "text", text: summary }],
 				details: {

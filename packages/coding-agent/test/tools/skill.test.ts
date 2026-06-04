@@ -156,8 +156,8 @@ describe("SkillTool", () => {
 		const result = await tool!.execute("call-1", { name: "ultragoal", args: "go" });
 		const firstBlock = result.content[0];
 		expect(firstBlock?.type).toBe("text");
-		expect(firstBlock?.type === "text" ? firstBlock.text : "").toContain("Handed off");
-		expect(firstBlock?.type === "text" ? firstBlock.text : "").toContain("ultragoal");
+		expect(firstBlock?.type === "text" ? firstBlock.text : "").toContain('"callee":"ultragoal"');
+		expect(firstBlock?.type === "text" ? firstBlock.text : "").toContain('"args":"go"');
 		expect(result.details?.name).toBe("ultragoal");
 		expect(result.details?.args).toBe("go");
 

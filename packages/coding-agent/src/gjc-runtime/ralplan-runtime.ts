@@ -447,20 +447,17 @@ async function handleConsensusHandoff(args: readonly string[], cwd: string): Pro
 		task: resolved.task,
 		state_path: statePath,
 		run_id: runId,
-		handoff: "Run `/skill:ralplan` inside the GJC agent to drive the Planner / Architect / Critic consensus loop.",
+		handoff: "/skill:ralplan",
 	};
 	const stdout = resolved.json
-		? `${JSON.stringify(summary, null, 2)}\n`
+		? `${JSON.stringify(summary)}\n`
 		: [
-				`Seeded ralplan ${summary.mode} run (${resolved.interactive ? "interactive" : "automated"}) at ${statePath}.`,
-				`Active run_id: ${runId}`,
-				resolved.architectKind ? `Architect: ${resolved.architectKind}` : undefined,
-				resolved.criticKind ? `Critic: ${resolved.criticKind}` : undefined,
-				"Run `/skill:ralplan` inside the GJC agent to execute the consensus loop.",
+				`ralplan seed run_id=${runId}`,
+				`state_path=${statePath}`,
+				`mode=${mode} interactive=${resolved.interactive} architect=${summary.architect} critic=${summary.critic}`,
+				"handoff=/skill:ralplan",
 				"",
-			]
-				.filter((line): line is string => Boolean(line))
-				.join("\n");
+			].join("\n");
 	return { status: 0, stdout };
 }
 

@@ -1236,15 +1236,14 @@ function renderCompleteHandoff(
 	result: { plan: UltragoalPlan; goal?: UltragoalGoal; allComplete: boolean },
 	json: boolean,
 ): string {
-	if (json) return `${JSON.stringify(result, null, 2)}\n`;
-	if (result.allComplete) return "All ultragoal goals are complete.\n";
-	if (!result.goal) return "No schedulable ultragoal goal found.\n";
+	if (json) return `${JSON.stringify(result)}\n`;
+	if (result.allComplete) return "ultragoal complete all=true\n";
+	if (!result.goal) return "ultragoal next-action=none\n";
 	return [
-		`Ultragoal handoff: ${result.goal.id} — ${result.goal.title}`,
-		`Objective: ${result.goal.objective}`,
-		`GJC objective: ${result.plan.gjcObjective}`,
-		'Call goal({"op":"get"}); call goal({"op":"create","objective":"<printed objective>"}) only if no active GJC goal exists, then keep the GJC goal active while this Ultragoal story is verified and checkpointed.',
-		'Before checkpointing complete, obtain a passing architectReview (architecture/product/code CLEAR + APPROVE) and executorQa (e2e/red-team passed with contractCoverage, surfaceEvidence, adversarialCases, and artifactRefs matrix evidence), then checkpoint with --quality-gate-json and a fresh active goal snapshot; record blockers instead of completing on any finding, plan/code mismatch, shallow evidence, or missing artifact link; call goal({"op":"complete"}) only after the final aggregate receipt exists.',
+		`ultragoal next-action=execute-goal goal-id=${result.goal.id}`,
+		`objective=${result.goal.objective}`,
+		`gjc-objective=${result.plan.gjcObjective}`,
+		"checkpoint requires=architectReview:CLEAR+APPROVE,executorQa:passed",
 		"",
 	].join("\n");
 }
@@ -1290,7 +1289,7 @@ export async function runNativeUltragoalCommand(args: string[], cwd = process.cw
 				});
 				return {
 					status: 0,
-					stdout: json ? `${JSON.stringify(plan, null, 2)}\n` : `Checkpointed ${goalId} as ${status}.\n`,
+					stdout: json ? `${JSON.stringify(plan)}\n` : `ultragoal checkpoint goal-id=${goalId} status=${status}\n`,
 				};
 			}
 			case "steer": {
