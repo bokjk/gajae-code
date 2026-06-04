@@ -4,6 +4,7 @@ import { CANONICAL_GJC_WORKFLOW_SKILLS, type CanonicalGjcWorkflowSkill, SKILL_AC
 export type { CanonicalGjcWorkflowSkill };
 
 export const WORKFLOW_STATE_RECEIPT_VERSION = 1;
+export const WORKFLOW_STATE_VERSION = 2;
 export const WORKFLOW_STATE_RECEIPT_FRESH_MS = 30 * 60 * 1000;
 
 export type WorkflowStateMutationOwner = "gjc-state-cli" | "gjc-runtime" | "gjc-hook";
