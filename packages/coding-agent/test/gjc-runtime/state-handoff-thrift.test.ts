@@ -120,13 +120,16 @@ describe("CONSUMER/KEY-FIELD MATRIX for compact handoff payloads", () => {
 			"
 			`);
 
-		const deepSeed = await runNativeDeepInterviewCommand(["--json", "clarify this idea"], root);
+		const deepSeed = await runNativeDeepInterviewCommand(
+			["--standard", "--threshold", "0.05", "--threshold-source", "flag:explicit", "--json", "clarify this idea"],
+			root,
+		);
 		expect(deepSeed.status).toBe(0);
 		const deepSeedPayload = JSON.parse(deepSeed.stdout ?? "{}") as Record<string, unknown>;
 		assertKeys(deepSeedPayload, ["state_path", "handoff"]);
 		expect(deepSeedPayload.handoff).toBe("/skill:deep-interview");
 		expect(scrub(deepSeed.stdout ?? "")).toMatchInlineSnapshot(`
-			"{"skill":"deep-interview","resolution":"standard","threshold":0.05,"threshold_source":"/Users/bellman/.gjc/agent/config.yml","idea":"clarify this idea","state_path":"/tmp/SCRUBBED","handoff":"/skill:deep-interview"}
+			"{"skill":"deep-interview","resolution":"standard","threshold":0.05,"threshold_source":"flag:explicit","idea":"clarify this idea","state_path":"/tmp/SCRUBBED","handoff":"/skill:deep-interview"}
 			"
 			`);
 
