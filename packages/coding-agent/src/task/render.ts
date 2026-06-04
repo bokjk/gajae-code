@@ -852,6 +852,9 @@ function renderAgentResult(result: TaskResultReceipt, isLast: boolean, expanded:
 		lines.push(...renderOutputSection(result.preview, continuePrefix, expanded, theme, 3, 12));
 	}
 
+	if (result.roi?.lowRoi) {
+		lines.push(`${continuePrefix}${theme.fg("warning", "low ROI: produced no material contribution")}`);
+	}
 	if (result.outputRef) {
 		lines.push(
 			`${continuePrefix}${theme.fg(

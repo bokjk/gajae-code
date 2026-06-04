@@ -2,7 +2,7 @@ import type { ThinkingLevel } from "@gajae-code/agent-core";
 import type { Usage } from "@gajae-code/ai";
 import { $env } from "@gajae-code/utils";
 import * as z from "zod/v4";
-import type { TaskResultReceipt } from "./receipt";
+import type { TaskResultReceipt, TaskRoi } from "./receipt";
 import { getTaskSimpleModeCapabilities, type TaskSimpleMode } from "./simple-mode";
 import type { SpawnPlanReceipt } from "./spawn-gate";
 import type { NestedRepoPatch } from "./worktree";
@@ -323,6 +323,7 @@ export interface SingleResult {
 	outputMeta?: { lineCount: number; charCount: number; byteSize?: number; sha256?: string };
 	/** Fork-context seed accounting for this subagent, when inherited parent context was cloned. */
 	forkContext?: { mode: ForkContextMode; clonedTokens: number };
+	roi?: TaskRoi;
 }
 
 /** Tool details for TUI rendering */
@@ -334,6 +335,13 @@ export interface TaskToolDetails {
 	usage?: Usage;
 	/** Aggregate cloned tokens copied into fork-context seeds across subagents. */
 	forkContextClonedTokens?: number;
+	roiSummary?: {
+		childCount: number;
+		totalTokens: number;
+		totalCostTotal?: number;
+		totalClonedTokens?: number;
+		lowRoiChildIds: string[];
+	};
 	progress?: AgentProgress[];
 	async?: {
 		state: "running" | "paused" | "queued" | "completed" | "failed";
