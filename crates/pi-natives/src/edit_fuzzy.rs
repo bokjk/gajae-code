@@ -169,11 +169,12 @@ fn normalize_line(line: Line<'_>, prefix_depth: Option<i32>) -> Vec<u16> {
 			out.push(b' ' as u16);
 		}
 		pending_space = false;
-		// Mirror TS normalizeForFuzzy (normalize.ts:230-238) EXACTLY: map smart
-		// quote/apostrophe/dash classes to ASCII; do NOT lowercase.
+		// Mirror TS normalizeForFuzzy EXACTLY: map only the U+201E/U+201F/«/» and
+		// U+201A/U+201B/`/´ and dash classes. TS does NOT map U+201C/U+201D/U+2018/
+		// U+2019, and does NOT lowercase.
 		let mapped = match unit {
-			0x201c | 0x201d | 0x201e | 0x201f | 0x00ab | 0x00bb => b'"' as u16,
-			0x2018 | 0x2019 | 0x201a | 0x201b | 0x0060 | 0x00b4 => b'\'' as u16,
+			0x201e | 0x201f | 0x00ab | 0x00bb => b'"' as u16,
+			0x201a | 0x201b | 0x0060 | 0x00b4 => b'\'' as u16,
 			0x2010 | 0x2011 | 0x2012 | 0x2013 | 0x2014 | 0x2212 => b'-' as u16,
 			_ => unit,
 		};

@@ -466,7 +466,7 @@ function findBestFuzzyMatchCore(
 	return { best, aboveThresholdCount, secondBestScore };
 }
 
-function findBestFuzzyMatch(content: string, target: string, threshold: number): BestFuzzyMatchResult {
+export function findBestFuzzyMatch(content: string, target: string, threshold: number): BestFuzzyMatchResult {
 	const contentLines = content.split("\n");
 	const targetLines = target.split("\n");
 
