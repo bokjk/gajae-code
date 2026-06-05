@@ -10,6 +10,7 @@ import type { GoalModeState, GoalRuntime } from "../goals";
 import { GoalTool } from "../goals/tools/goal-tool";
 import type { HindsightSessionState } from "../hindsight/state";
 import { LspTool } from "../lsp";
+import type { WorkflowGateEmitter } from "../modes/shared/agent-wire/unattended-session";
 import type { PlanModeState } from "../plan-mode/state";
 import type { AgentRegistry } from "../registry/agent-registry";
 import type { ForkContextSeed, ForkContextSeedOptions } from "../session/agent-session";
@@ -198,6 +199,8 @@ export interface ToolSession {
 	getPlanModeState?: () => PlanModeState | undefined;
 	/** Goal mode state (if active or paused) */
 	getGoalModeState?: () => GoalModeState | undefined;
+	/** Unattended workflow-gate emitter (present only when unattended mode is negotiated). */
+	getWorkflowGateEmitter?: () => WorkflowGateEmitter | undefined;
 	/** Goal runtime for the active agent session. */
 	getGoalRuntime?: () => GoalRuntime | undefined;
 	/** Bridge to the connected client (e.g. ACP editor host). Tools should route fs/terminal/permission requests through this when available. */

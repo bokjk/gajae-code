@@ -15,6 +15,7 @@ from .client import (
     RpcTimeoutError,
     ProtocolErrorListener,
     UiRequestListener,
+    WorkflowGateListener,
 )
 from .host_tools import HostTool, HostToolContext, HostToolResultPayload, HostToolResultValue, host_tool
 from .host_uris import (
@@ -79,6 +80,8 @@ from .protocol import (
     TurnEndEvent,
     TurnStartEvent,
     UnknownNotification,
+    WorkflowGate,
+    WorkflowGateOption,
     UserMessage,
     assistant_text,
     assistant_text_with_thinking,
@@ -86,6 +89,7 @@ from .protocol import (
     message_text,
     message_text_with_thinking,
     parse_notification,
+    parse_workflow_gate,
     parse_session_state,
     parse_todo_phases,
 )
@@ -169,6 +173,9 @@ __all__ = [
     "TurnStartEvent",
     "UiRequestListener",
     "UnknownNotification",
+    "WorkflowGate",
+    "WorkflowGateListener",
+    "WorkflowGateOption",
     "UserMessage",
     "assistant_text",
     "assistant_text_with_thinking",
@@ -176,6 +183,7 @@ __all__ = [
     "message_text",
     "message_text_with_thinking",
     "parse_notification",
+    "parse_workflow_gate",
     "parse_session_state",
     "parse_todo_phases",
     "host_tool",

@@ -627,3 +627,129 @@ Current helper characteristics:
 - Does **not** expose helper methods for every protocol command (for example, `set_interrupt_mode` and `set_session_name` are in protocol types but not wrapped as dedicated methods)
 
 Use raw protocol frames if you need complete surface coverage.
+
+## Workflow gates (agent-driven lifecycle)
+
+The workflow-gate contract makes every human-gated lifecycle moment
+(deep-interview questions, ralplan approval, ultragoal execution sign-off)
+machine-addressable so an external agent can answer it over RPC without
+screen-scraping.
+
+### Outbound event: `workflow_gate`
+
+```json
+{
+  "type": "workflow_gate",
+  "gate_id": "wg_4845_ralplan_000001",
+  "stage": "ralplan",
+  "kind": "approval",
+  "schema": { "type": "string", "enum": ["approve", "request-changes", "reject"] },
+  "schema_hash": "<sha256 of canonical schema>",
+  "options": [{ "value": "approve", "label": "Approve execution" }],
+  "context": { "title": "Approve plan?", "summary": "…" },
+  "created_at": "2026-06-05T05:00:00.000Z",
+  "required": true
+}
+```
+
+- `gate_id` is **run-scoped and monotonic**: `wg_<run>_<stage>_<NNNNNN>`.
+- `stage` is one of `deep-interview` | `ralplan` | `ultragoal`. `team` is
+  reserved and rejected for v1 (single-agent only).
+- `kind` is `question` | `approval` | `execution`.
+- `schema` is a **documented subset of JSON Schema 2020-12**. Supported keywords:
+  `type`, `enum`, `const`, `properties`, `required`, `additionalProperties`,
+  `items`, `minLength`, `maxLength`, `minimum`, `maximum`, `title`,
+  `description`, `oneOf`, `anyOf`. Any other keyword is rejected at gate
+  construction (`invalid_workflow_gate_schema`) so the server never advertises a
+  schema it will not validate. `schema_hash` equals the server-side validation
+  hash for that gate.
+
+### Inbound command: `workflow_gate_response`
+
+```json
+{ "type": "workflow_gate_response", "gate_id": "wg_4845_ralplan_000001", "answer": "approve", "idempotency_key": "k1" }
+```
+
+The answer is validated against the advertised schema **before acceptance**:
+
+- Valid → resolution persisted before the workflow advances; response:
+  `{ "type": "response", "command": "workflow_gate_response", "success": true, "data": { "gate_id": "…", "status": "accepted", "answer_hash": "…", "resolved_at": "…" } }`.
+- Invalid → the gate stays **pending** and the resolution carries a typed
+  `invalid_workflow_gate_answer` error listing each `{ path, keyword, message, expected? }`.
+- Idempotency: replaying the same `idempotency_key` + identical body returns the
+  cached resolution; the same key with a different body is an
+  `idempotency_conflict`; answering an already-accepted gate is `already_resolved`.
+
+### Entering unattended mode: `negotiate_unattended`
+
+Unattended (zero-human) operation is **fail-closed**. The external agent must
+declare its budget, scopes, and action allowlist up front:
+
+```json
+{
+  "type": "negotiate_unattended",
+  "declaration": {
+    "actor": "openclaw/hermes",
+    "budget": { "max_tokens": 2000000, "max_tool_calls": 5000, "max_wall_time_ms": 3600000, "max_cost_usd": 20 },
+    "scopes": ["prompt", "control", "bash"],
+    "action_allowlist": ["bash.readonly", "file.write"]
+  }
+}
+```
+
+A missing or partial declaration refuses unattended mode. Budget, scope, and
+audit enforcement are layered on this contract by the unattended control plane
+(see issues #318/#319/#320). Attended mode is unaffected: clients that never send
+`negotiate_unattended` keep the existing extension-UI / permission behavior.
+
+
+> **Status (contract foundation, #315):** the `workflow_gate` /
+> `workflow_gate_response` / `negotiate_unattended` frames, the answer-schema
+> validator, and the durable gate broker are defined and tested at the contract
+> layer. Wiring these commands into live session dispatch and the bridge frame
+> transport is delivered by #318 (budget/controller) and #321 (bridge). Until
+> then `dispatchRpcCommand` does not yet route them through a live session.
+
+
+### Answering gates from a client (#322)
+
+Both clients expose typed `workflow_gate` receive + respond helpers so an agent
+can answer a gate from its own memory via a callback.
+
+`@gajae-code/bridge-client` (TypeScript):
+
+```ts
+import { BridgeClient } from "@gajae-code/bridge-client";
+
+const client = new BridgeClient({ baseUrl, token });
+// Headless policy: every received gate is routed to the resolver and answered.
+for await (const { gate, answer } of client.consumeWorkflowGates(sessionId, ownerToken, gate => {
+  if (gate.kind === "approval") return { decision: "approve" };
+  if (gate.kind === "question") return { selected: [gate.options?.[0]?.value], other: false };
+  return { decision: "approve" };
+})) {
+  console.log(`answered ${gate.gate_id} (${gate.kind}) with`, answer);
+}
+// Or answer a single gate directly:
+await client.respondGate(sessionId, gateId, ownerToken, { decision: "approve" });
+```
+
+`python/gjc-rpc` (Python):
+
+```python
+from gjc_rpc import RpcClient, WorkflowGate
+
+client = RpcClient(executable="gjc")
+
+def resolver(gate: WorkflowGate) -> object:
+    if gate.kind == "approval":
+        return {"decision": "approve"}
+    if gate.kind == "question":
+        return {"selected": [gate.options[0].value] if gate.options else [], "other": False}
+    return {"decision": "approve"}
+
+# Headless policy: route every received gate to the resolver and respond.
+client.run_workflow_gate_policy(resolver)
+client.start()
+# Or answer a single gate directly: client.respond_gate(gate_id, {"decision": "approve"})
+```

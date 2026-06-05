@@ -198,6 +198,8 @@ endpoint matrix, the default handshake advertises no accepted scopes.
 | `get_messages` | `message:read` |
 | `get_login_providers` | `admin` |
 | `login` | `admin` |
+| `negotiate_unattended` | `control` |
+| `workflow_gate_response` | `prompt` |
 
 ### Dormant capabilities and frame types
 
@@ -206,10 +208,10 @@ conformance tests, but they are not advertised by the default fail-closed
 handshake:
 
 Capabilities: `events`, `prompt`, `permission`, `elicitation`, `ui.declarative`,
-`host_tools`, `host_uri`.
+`host_tools`, `host_uri`, `workflow_gate`.
 
 Frame types: `ready`, `event`, `response`, `ui_request`, `permission_request`,
-`host_tool_call`, `host_uri_request`, `reset`, `error`.
+`host_tool_call`, `host_uri_request`, `reset`, `workflow_gate`, `error`.
 
 ## UI Capability Parity
 

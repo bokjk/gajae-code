@@ -1183,6 +1183,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			getActiveModelString,
 			getPlanModeState: () => session?.getPlanModeState(),
 			getGoalModeState: () => session?.getGoalModeState(),
+			getWorkflowGateEmitter: () => session?.getWorkflowGateEmitter(),
 			getGoalRuntime: () => session?.goalRuntime,
 			getClientBridge: () => session?.clientBridge,
 			getCompactContext: () => session.formatCompactContext(),

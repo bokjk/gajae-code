@@ -60,6 +60,7 @@ from .protocol import (
     TurnEndEvent,
     TurnStartEvent,
     UnknownNotification,
+    WorkflowGate,
     assistant_text,
     parse_agent_messages,
     parse_bash_result,
@@ -79,6 +80,7 @@ from .protocol import (
 AgentEventListener = Callable[[RpcAgentEvent], None]
 NotificationListener = Callable[[RpcNotification], None]
 UiRequestListener = Callable[[ExtensionUiRequest], None]
+WorkflowGateListener = Callable[[WorkflowGate], None]
 ExtensionErrorListener = Callable[[ExtensionError], None]
 ReadyListener = Callable[[ReadyEvent], None]
 UnknownNotificationListener = Callable[[UnknownNotification], None]
@@ -356,6 +358,7 @@ class RpcClient:
         self._ready_listeners: list[ReadyListener] = []
         self._unknown_notification_listeners: list[UnknownNotificationListener] = []
         self._ui_request_listeners: list[UiRequestListener] = []
+        self._workflow_gate_listeners: list[WorkflowGateListener] = []
         self._extension_error_listeners: list[ExtensionErrorListener] = []
         self._protocol_error_listeners: list[ProtocolErrorListener] = []
         self._listener_error_listeners: list[ListenerErrorListener] = []
@@ -575,6 +578,37 @@ class RpcClient:
     def on_ui_request(self, listener: UiRequestListener) -> Callable[[], None]:
         self._ui_request_listeners.append(listener)
         return lambda: self._remove_listener(self._ui_request_listeners, listener)
+
+
+    def on_workflow_gate(self, listener: WorkflowGateListener) -> Callable[[], None]:
+        """Register a typed listener for inbound `workflow_gate` events (#322)."""
+        self._workflow_gate_listeners.append(listener)
+        return lambda: self._remove_listener(self._workflow_gate_listeners, listener)
+
+    def respond_gate(self, gate_id: str, answer: object, *, idempotency_key: str | None = None) -> None:
+        """Answer a workflow gate by sending a `workflow_gate_response` (#322)."""
+        payload: JsonObject = {
+            "type": "workflow_gate_response",
+            "gate_id": gate_id,
+            "answer": _clone_json_value(answer),
+        }
+        if idempotency_key is not None:
+            payload["idempotency_key"] = idempotency_key
+        self._send_notification(payload)
+
+    def run_workflow_gate_policy(
+        self, resolver: Callable[[WorkflowGate], object]
+    ) -> Callable[[], None]:
+        """Headless policy: route every received gate to ``resolver`` and respond.
+
+        ``resolver`` returns the answer (the agent's memory-backed decision); it is
+        posted via :meth:`respond_gate`. Returns an unsubscribe callable.
+        """
+
+        def handle(gate: WorkflowGate) -> None:
+            self.respond_gate(gate.gate_id, resolver(gate))
+
+        return self.on_workflow_gate(handle)
 
     def on_extension_error(self, listener: ExtensionErrorListener) -> Callable[[], None]:
         self._extension_error_listeners.append(listener)
@@ -1392,6 +1426,16 @@ class RpcClient:
                         listener_notification.type,
                         self._ui_request_listeners,
                         cast(ExtensionUiRequest, listener_notification),
+                    )
+                    continue
+
+
+                if isinstance(notification, WorkflowGate):
+                    self._dispatch_listeners(
+                        "workflow_gate",
+                        listener_notification.type,
+                        self._workflow_gate_listeners,
+                        cast(WorkflowGate, listener_notification),
                     )
                     continue
 

@@ -177,6 +177,7 @@ import { type LocalProtocolOptions, resolveLocalUrlToPath } from "../internal-ur
 import { resolveMemoryBackend } from "../memory-backend";
 import { getCurrentThemeName, theme } from "../modes/theme/theme";
 import type { PlanModeState } from "../plan-mode/state";
+import type { WorkflowGateEmitter } from "../modes/shared/agent-wire/unattended-session";
 import autoContinuePrompt from "../prompts/system/auto-continue.md" with { type: "text" };
 import eagerTodoPrompt from "../prompts/system/eager-todo.md" with { type: "text" };
 import ircIncomingTemplate from "../prompts/system/irc-incoming.md" with { type: "text" };
@@ -844,6 +845,7 @@ export class AgentSession {
 	#scheduledHiddenNextTurnGeneration: number | undefined = undefined;
 	#planModeState: PlanModeState | undefined;
 	#goalModeState: GoalModeState | undefined;
+	#workflowGateEmitter: WorkflowGateEmitter | undefined;
 	#goalRuntime: GoalRuntime;
 	#goalTurnCounter = 0;
 	#planReferenceSent = false;
@@ -4086,6 +4088,15 @@ export class AgentSession {
 
 	setGoalModeState(state: GoalModeState | undefined): void {
 		this.#goalModeState = state;
+	}
+
+
+	getWorkflowGateEmitter(): WorkflowGateEmitter | undefined {
+		return this.#workflowGateEmitter;
+	}
+
+	setWorkflowGateEmitter(emitter: WorkflowGateEmitter | undefined): void {
+		this.#workflowGateEmitter = emitter;
 	}
 
 	get goalRuntime(): GoalRuntime {

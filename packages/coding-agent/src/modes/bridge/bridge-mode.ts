@@ -39,6 +39,7 @@ const SERVER_CAPABILITIES: readonly BridgeCapability[] = [
 	"ui.declarative",
 	"host_tools",
 	"host_uri",
+	"workflow_gate",
 ];
 
 const DEFAULT_BRIDGE_SCOPES: readonly BridgeCommandScope[] = ["prompt"];
@@ -71,6 +72,7 @@ const SERVER_FRAME_TYPES: readonly BridgeFrameType[] = [
 	"host_tool_call",
 	"host_uri_request",
 	"reset",
+	"workflow_gate",
 	"error",
 ];
 

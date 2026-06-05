@@ -10,6 +10,10 @@ import type {
 	RpcHostUriSchemeDefinition,
 	RpcResponse,
 	RpcSessionState,
+	RpcUnattendedAccepted,
+	RpcUnattendedDeclaration,
+	RpcWorkflowGateResolution,
+	RpcWorkflowGateResponse,
 } from "../../rpc/rpc-types";
 import { rpcError, rpcSuccess } from "./responses";
 
@@ -23,12 +27,25 @@ export interface RpcHostUriRegistry {
 	setSchemes(schemes: RpcHostUriSchemeDefinition[]): string[];
 }
 
+/**
+ * Optional unattended control plane wired into RPC dispatch (#318/#319/#323).
+ * When present, `negotiate_unattended` and `workflow_gate_response` route here
+ * instead of falling through to the unknown-command path.
+ */
+export interface RpcUnattendedControlPlane {
+	/** Enter unattended mode (fail-closed); throws an Error on refusal. */
+	negotiate(declaration: RpcUnattendedDeclaration): RpcUnattendedAccepted;
+	/** Resolve a pending workflow gate with the agent's answer. */
+	resolveGate(response: RpcWorkflowGateResponse): Promise<RpcWorkflowGateResolution>;
+}
+
 export interface RpcCommandDispatchContext {
 	session: AgentSession;
 	output: RpcCommandDispatchOutput;
 	hostToolRegistry: RpcHostToolRegistry;
 	hostUriRegistry: RpcHostUriRegistry;
 	createUiContext: () => Pick<ExtensionUIContext, "notify">;
+	unattendedControlPlane?: RpcUnattendedControlPlane;
 }
 
 export function normalizeHostToolDefinitions(tools: RpcHostToolDefinition[]): RpcHostToolDefinition[] {
@@ -59,7 +76,7 @@ export async function dispatchRpcCommand(
 	command: RpcCommand,
 	context: RpcCommandDispatchContext,
 ): Promise<RpcResponse> {
-	const { session, output, hostToolRegistry, hostUriRegistry, createUiContext } = context;
+	const { session, output, hostToolRegistry, hostUriRegistry, createUiContext, unattendedControlPlane } = context;
 	const id = command.id;
 
 	switch (command.type) {
@@ -330,6 +347,34 @@ export async function dispatchRpcCommand(
 				return rpcSuccess(id, "login", { providerId: command.providerId });
 			} catch (err: unknown) {
 				return rpcError(id, "login", err instanceof Error ? err.message : String(err));
+			}
+		}
+
+		case "negotiate_unattended": {
+			if (!unattendedControlPlane) {
+				return rpcError(id, "negotiate_unattended", "unattended mode is not available on this session");
+			}
+			try {
+				const accepted = unattendedControlPlane.negotiate(command.declaration);
+				return rpcSuccess(id, "negotiate_unattended", accepted);
+			} catch (err) {
+				return rpcError(id, "negotiate_unattended", err instanceof Error ? err.message : String(err));
+			}
+		}
+
+		case "workflow_gate_response": {
+			if (!unattendedControlPlane) {
+				return rpcError(id, "workflow_gate_response", "workflow gates are not available on this session");
+			}
+			try {
+				const resolution = await unattendedControlPlane.resolveGate({
+					gate_id: command.gate_id,
+					answer: command.answer,
+					idempotency_key: command.idempotency_key,
+				});
+				return rpcSuccess(id, "workflow_gate_response", resolution);
+			} catch (err) {
+				return rpcError(id, "workflow_gate_response", err instanceof Error ? err.message : String(err));
 			}
 		}
 

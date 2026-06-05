@@ -21,6 +21,7 @@ import type { AgentSession } from "../../session/agent-session";
 import { initializeExtensions } from "../runtime-init";
 import { dispatchRpcCommand } from "../shared/agent-wire/command-dispatch";
 import { rpcError as error } from "../shared/agent-wire/responses";
+import { UnattendedSessionControlPlane } from "../shared/agent-wire/unattended-session";
 import { isRpcHostToolResult, isRpcHostToolUpdate, RpcHostToolBridge } from "./host-tools";
 import { isRpcHostUriResult, RpcHostUriBridge } from "./host-uris";
 import type {
@@ -159,6 +160,14 @@ export async function runRpcMode(
 	const pendingExtensionRequests = new Map<string, PendingExtensionRequest>();
 	const hostToolBridge = new RpcHostToolBridge(output);
 	const hostUriBridge = new RpcHostUriBridge(output);
+	// Unattended control plane (#318/#319/#323/G011): routes negotiate_unattended +
+	// workflow_gate_response and lets skill runtimes emit gates over RPC.
+	const unattendedControlPlane = new UnattendedSessionControlPlane({
+		runId: session.sessionId,
+		sessionId: session.sessionId,
+		emitFrame: gate => output(gate),
+	});
+	session.setWorkflowGateEmitter(unattendedControlPlane);
 
 	// Shutdown request flag (wrapped in object to allow mutation with const)
 	const shutdownState = { requested: false };
@@ -419,6 +428,7 @@ export async function runRpcMode(
 			hostToolRegistry: hostToolBridge,
 			hostUriRegistry: hostUriBridge,
 			createUiContext: () => new RpcExtensionUIContext(pendingExtensionRequests, output),
+			unattendedControlPlane,
 		});
 
 	/**
