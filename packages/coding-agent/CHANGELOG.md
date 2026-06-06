@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Improved slash command and `skill:*` suggestion ranking so `/team` surfaces the matching skill before weaker fallback candidates.
+
 ### Fixed
 
 - Routed unattended deep-interview ask-tool questions through `workflow_gate { kind: "question" }` events, including Round 0 topology and challenge-mode metadata, free-text option/schema shape, headless RPC answers, and synchronous response race handling (#316).
