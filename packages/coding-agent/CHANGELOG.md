@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-06-07
+
+### Changed
+
+- Hardened the default system prompt with a `<skill-discipline>` block (never ignore skill text, keep read-only/interview skills from mutating, recommend and invoke the matching `/skill` on approval) and tightened `<communication>` to ban permission-begging/deferral phrasing and never announce remaining work instead of doing it (#392).
+- Cleaned up the bundled GJC workflow skill docs and defaulted execution handoff to ultragoal while prioritizing ralplan refinement (#395, #396).
+
 ## [0.4.0] - 2026-06-06
 
 ### Added
