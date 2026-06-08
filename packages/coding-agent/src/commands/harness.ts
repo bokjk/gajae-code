@@ -241,6 +241,12 @@ interface OwnerExitEvidence {
 	lastSignal: string | null;
 	promptAcceptedSeen: boolean;
 	completedSeen: boolean;
+	/** True only when the owner is genuinely gone (lease missing or process dead). */
+	terminal: boolean;
+	/** True when the owner process is provably alive (live lease + fresh heartbeat) but the endpoint did not route. */
+	transient: boolean;
+	/** ISO timestamp of the most recent non-terminal RPC-derived owner event, if any (observability only). */
+	lastRpcActivityAt: string | null;
 }
 
 async function buildOwnerExitEvidence(root: string, state: SessionState): Promise<OwnerExitEvidence> {
@@ -251,12 +257,23 @@ async function buildOwnerExitEvidence(root: string, state: SessionState): Promis
 	let lastSignal: string | null = null;
 	let promptAcceptedSeen = false;
 	let completedSeen = false;
+	let lastRpcActivityAt: string | null = null;
 	for (const event of events) {
 		const signal = (event.evidence as { signal?: unknown } | undefined)?.signal;
 		if (typeof signal === "string") lastSignal = signal;
 		if (event.kind === "prompt_accepted" || signal === "prompt-accepted") promptAcceptedSeen = true;
 		if (event.kind === "rpc_agent_completed" || signal === "completed") completedSeen = true;
+		// Terminal completion/failure frames are NOT owner liveness — exclude them from activity.
+		if (event.kind.startsWith("rpc_") && event.kind !== "rpc_agent_completed" && event.kind !== "rpc_agent_failed") {
+			lastRpcActivityAt = event.createdAt;
+		}
 	}
+	// Owner liveness is the lease heartbeat, never RPC frames: a "live" lease means the owner process
+	// is alive and heartbeating within TTL, so a failed endpoint call is a transient observation gap.
+	// Real owner loss (missing/dead lease) stays terminal and keeps its original reason string so
+	// existing consumers that match on the reason continue to escalate.
+	const terminal = !lease || leaseStatus === "dead";
+	const transient = leaseStatus === "live";
 	let reason = "owner-not-live";
 	if (!lease) {
 		reason = promptAcceptedSeen && !completedSeen ? "owner-exited-after-prompt-acceptance" : "owner-lease-missing";
@@ -281,6 +298,9 @@ async function buildOwnerExitEvidence(root: string, state: SessionState): Promis
 		lastSignal,
 		promptAcceptedSeen,
 		completedSeen,
+		terminal,
+		transient,
+		lastRpcActivityAt,
 	};
 }
 
@@ -684,6 +704,7 @@ export default class Harness extends Command {
 		const handle: SessionHandle = {
 			sessionId,
 			harness,
+			mode: input.mode === "review" || input.reviewOnly === true ? "review" : "implement",
 			repo: typeof input.repo === "string" ? input.repo : null,
 			workspace,
 			branch: preflight.declaredBranch ?? preflight.actualBranch,
