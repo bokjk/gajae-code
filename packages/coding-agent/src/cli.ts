@@ -18,7 +18,7 @@ if (Bun.semver.order(Bun.version, MIN_BUN_VERSION) < 0) {
 }
 
 process.title = APP_NAME;
-const rootHelpFlags = ["--help", "-h", "help", ""];
+const rootHelpFlags = ["--help", "-h", "help"];
 const versionFlags = ["--version", "-v"];
 
 
