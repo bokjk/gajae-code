@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-06-14
+
+### Fixed
+
+- Fixed Korean/Hangul input composition breaking in Android Termius, where typing `안녕하세요` produced duplicated jamo/syllable residue (`ㅇ아안ㄴ녀녕…`). GJC's startup keyboard reprogramming (Kitty keyboard protocol query `CSI ? u` / push `CSI > 7 u`, and the xterm modifyOtherKeys fallback `CSI > 4 ; 2 m`) disrupts the Android IME's syllable composition. Added a `GJC_TUI_KEYBOARD_PROTOCOL` opt-out (enabled by default): set `GJC_TUI_KEYBOARD_PROTOCOL=0` to leave the keyboard in its default mode so IME composition works, matching terminals/TUIs that never enable these enhanced input modes.
+
 ## [0.5.0] - 2026-06-13
 
 ### Added
@@ -12,10 +18,6 @@
 ### Changed
 
 - Tightened markdown/editor rendering and terminal repaint behavior for the compact tool-block spacing and render-golden stability work.
-
-### Fixed
-
-- Fixed Korean/Hangul input composition breaking in Android Termius, where typing `안녕하세요` produced duplicated jamo/syllable residue (`ㅇ아안ㄴ녀녕…`). GJC's startup keyboard reprogramming (Kitty keyboard protocol query `CSI ? u` / push `CSI > 7 u`, and the xterm modifyOtherKeys fallback `CSI > 4 ; 2 m`) disrupts the Android IME's syllable composition. Added a `GJC_TUI_KEYBOARD_PROTOCOL` opt-out (enabled by default): set `GJC_TUI_KEYBOARD_PROTOCOL=0` to leave the keyboard in its default mode so IME composition works, matching terminals/TUIs that never enable these enhanced input modes.
 
 ## [0.4.5] - 2026-06-12
 
