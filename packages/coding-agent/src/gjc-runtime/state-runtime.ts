@@ -888,6 +888,24 @@ function buildHudForMode(
 				counts[status] = (counts[status] ?? 0) + 1;
 			}
 			const currentGoalRaw = goals.find(g => g.status === "active") ?? goals.find(g => g.status === "pending");
+			const rawLedger = payload.latestLedgerEvent;
+			const latestLedgerEvent =
+				rawLedger && typeof rawLedger === "object" && !Array.isArray(rawLedger)
+					? {
+							event:
+								typeof (rawLedger as Record<string, unknown>).event === "string"
+									? ((rawLedger as Record<string, unknown>).event as string)
+									: undefined,
+							goalId:
+								typeof (rawLedger as Record<string, unknown>).goalId === "string"
+									? ((rawLedger as Record<string, unknown>).goalId as string)
+									: undefined,
+							timestamp:
+								typeof (rawLedger as Record<string, unknown>).timestamp === "string"
+									? ((rawLedger as Record<string, unknown>).timestamp as string)
+									: undefined,
+						}
+					: undefined;
 			const status = typeof payload.status === "string" ? (payload.status as string) : (phase ?? "pending");
 			return buildUltragoalHudSummary({
 				status,
@@ -900,6 +918,7 @@ function buildHudForMode(
 					: undefined,
 				counts,
 				goals: goals.map(g => ({ id: g.id as string, title: g.title as string, status: g.status as string })),
+				latestLedgerEvent,
 				updatedAt,
 			});
 		}

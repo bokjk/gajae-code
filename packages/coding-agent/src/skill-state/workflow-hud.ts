@@ -21,6 +21,8 @@ interface RalplanHudState extends WorkflowGateHudState {
 	stage?: string;
 	waiting?: string;
 	iteration?: number;
+	iterationFromIndex?: number;
+	stages?: string;
 	verdict?: string;
 	latestSummary?: string;
 	pendingApproval?: boolean;
@@ -118,7 +120,14 @@ export function buildRalplanHudSummary(state: RalplanHudState): WorkflowHudSumma
 			...gateChips(state, 6),
 			chip("stage", state.stage, 10),
 			chip("waiting", state.waiting, 20),
-			chip("iter", state.iteration === undefined ? undefined : String(state.iteration), 30),
+			chip(
+				"iter",
+				(state.iterationFromIndex ?? state.iteration) === undefined
+					? undefined
+					: String(state.iterationFromIndex ?? state.iteration),
+				30,
+			),
+			chip("stages", state.stages, 35),
 			chip("verdict", verdict, 40, verdictSeverity),
 		]),
 		...(state.updatedAt ? { updated_at: state.updatedAt } : {}),
@@ -136,17 +145,15 @@ export function buildUltragoalHudSummary(state: UltragoalHudState): WorkflowHudS
 			chip("goals", `${complete}/${total}`, 10),
 			chip("current", state.currentGoal ? `${state.currentGoal.id}:${state.currentGoal.title}` : state.status, 20),
 			chip("status", state.status, 30, state.status === "complete" ? "success" : undefined),
+			chip(
+				"ledger",
+				state.latestLedgerEvent?.event
+					? [state.latestLedgerEvent.event, state.latestLedgerEvent.goalId].filter(Boolean).join(":")
+					: undefined,
+				35,
+			),
 			...gateChips(state, 40),
 		]),
-		details: state.latestLedgerEvent
-			? compactChips([
-					chip(
-						"ledger",
-						[state.latestLedgerEvent.event, state.latestLedgerEvent.goalId].filter(Boolean).join(":"),
-						100,
-					),
-				])
-			: undefined,
 		...(state.updatedAt ? { updated_at: state.updatedAt } : {}),
 	};
 }

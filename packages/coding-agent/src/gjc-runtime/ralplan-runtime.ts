@@ -5,6 +5,12 @@ import { syncSkillActiveState } from "../skill-state/active-state";
 import { buildRalplanHudSummary } from "../skill-state/workflow-hud";
 import { WORKFLOW_STATE_VERSION } from "../skill-state/workflow-state-contract";
 import { renderCliWriteReceipt } from "./cli-write-receipt";
+import {
+	formatRalplanStagePresence,
+	parseRalplanIndexLine,
+	type RalplanIndexRow,
+	summarizeRalplanIndex,
+} from "./ledger-event-renderer";
 import { isRestrictedRoleAgentBash } from "./restricted-role-agent-bash";
 import { migrateWorkflowState } from "./state-migrations";
 import { appendJsonl, readExistingStateForMutation, writeArtifact, writeWorkflowEnvelopeAtomic } from "./state-writer";
@@ -437,12 +443,32 @@ async function persistArtifact(resolved: ResolvedArtifactArgs, cwd: string): Pro
 	};
 }
 
+/**
+ * Read and parse the run's `index.jsonl` rows. Best-effort: returns [] when the
+ * file is absent or unreadable so HUD sync never fails on a missing index.
+ */
+async function readRalplanIndexRows(cwd: string, runId: string): Promise<RalplanIndexRow[]> {
+	try {
+		const indexPath = path.join(cwd, ".gjc", "plans", "ralplan", runId, "index.jsonl");
+		const text = await fs.readFile(indexPath, "utf8");
+		const rows: RalplanIndexRow[] = [];
+		for (const line of text.split(/\r?\n/)) {
+			const row = parseRalplanIndexLine(line);
+			if (row) rows.push(row);
+		}
+		return rows;
+	} catch {
+		return [];
+	}
+}
+
 async function syncRalplanHud(options: {
 	cwd: string;
 	sessionId?: string;
 	stage: string;
 	pendingApproval: boolean;
 	iteration?: number;
+	runId?: string;
 	latestSummary?: string;
 }): Promise<void> {
 	try {
@@ -453,17 +479,40 @@ async function syncRalplanHud(options: {
 			phase: options.stage,
 			sessionId: options.sessionId,
 			source: "gjc-ralplan-native",
-			hud: buildRalplanHudSummary({
-				stage: options.stage,
-				iteration: options.iteration,
-				pendingApproval: options.pendingApproval,
-				latestSummary: options.latestSummary,
-				updatedAt: new Date().toISOString(),
-			}),
+			hud: await buildRalplanHud(options),
 		});
 	} catch {
 		// HUD sync is best-effort and must not change command semantics.
 	}
+}
+
+async function buildRalplanHud(options: {
+	cwd: string;
+	stage: string;
+	pendingApproval: boolean;
+	iteration?: number;
+	latestSummary?: string;
+	runId?: string;
+}) {
+	let iterationFromIndex: number | undefined;
+	let stages: string | undefined;
+	if (options.runId) {
+		const rows = await readRalplanIndexRows(options.cwd, options.runId);
+		if (rows.length > 0) {
+			const summary = summarizeRalplanIndex(rows);
+			iterationFromIndex = summary.iteration;
+			stages = formatRalplanStagePresence(summary.currentStages);
+		}
+	}
+	return buildRalplanHudSummary({
+		stage: options.stage,
+		iteration: options.iteration,
+		iterationFromIndex,
+		stages,
+		pendingApproval: options.pendingApproval,
+		latestSummary: options.latestSummary,
+		updatedAt: new Date().toISOString(),
+	});
 }
 
 async function handleArtifactWrite(args: readonly string[], cwd: string): Promise<RalplanCommandResult> {
@@ -477,6 +526,7 @@ async function handleArtifactWrite(args: readonly string[], cwd: string): Promis
 		cwd,
 		sessionId: resolved.sessionId,
 		stage: persisted.stage,
+		runId: persisted.runId,
 		pendingApproval: persisted.stage === "final",
 		iteration: persisted.stageN,
 		latestSummary: `persisted ${persisted.stage} stage ${persisted.stageN}`,
@@ -617,6 +667,7 @@ async function handleConsensusHandoff(args: readonly string[], cwd: string): Pro
 		cwd,
 		sessionId: resolved.sessionId,
 		stage: "planner",
+		runId,
 		pendingApproval: false,
 		iteration: 1,
 		latestSummary: `${mode} run · ${resolved.interactive ? "interactive" : "automated"}`,

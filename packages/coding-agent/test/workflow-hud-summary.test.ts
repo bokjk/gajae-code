@@ -39,7 +39,19 @@ describe("workflow HUD summary builders", () => {
 		expect(hud.chips?.[0]).toEqual({ label: "pending", value: "approval", priority: 5, severity: "warning" });
 	});
 
-	it("keeps ultragoal latest ledger event in details only", () => {
+	it("renders ralplan iteration-from-index and stage presence chips", () => {
+		const hud = buildRalplanHudSummary({
+			stage: "architect",
+			iteration: 2,
+			iterationFromIndex: 1,
+			stages: "P·A·C",
+			pendingApproval: false,
+		});
+		expect(hud.chips?.find(chip => chip.label === "iter")?.value).toBe("1");
+		expect(hud.chips?.find(chip => chip.label === "stages")?.value).toBe("P·A·C");
+	});
+
+	it("renders ultragoal latest ledger event as a main chip", () => {
 		const hud = buildUltragoalHudSummary({
 			status: "blocked",
 			currentGoal: { id: "G001", title: "Build HUD", status: "blocked" },
@@ -50,9 +62,18 @@ describe("workflow HUD summary builders", () => {
 			],
 			latestLedgerEvent: { event: "goal_checkpointed", goalId: "G001" },
 		});
-		expect(hud.chips?.some(chip => chip.label === "ledger")).toBe(false);
-		expect(hud.details?.[0]?.label).toBe("ledger");
+		expect(hud.chips?.find(chip => chip.label === "ledger")?.value).toBe("goal_checkpointed:G001");
+		expect(hud.details).toBeUndefined();
 		expect(hud.chips?.[0]?.severity).toBe("blocked");
+	});
+
+	it("omits the ultragoal ledger chip when no event is present", () => {
+		const hud = buildUltragoalHudSummary({
+			status: "active",
+			counts: { complete: 0 },
+			goals: [{ id: "G001", title: "Build HUD", status: "active" }],
+		});
+		expect(hud.chips?.some(chip => chip.label === "ledger")).toBe(false);
 	});
 
 	it("prioritizes team blockers before progress and latest activity", () => {

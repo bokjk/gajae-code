@@ -4,6 +4,7 @@ import type { WorkflowHudSummary } from "../skill-state/active-state";
 import { buildUltragoalHudSummary as buildWorkflowUltragoalHudSummary } from "../skill-state/workflow-hud";
 import { renderCliWriteReceipt } from "./cli-write-receipt";
 import { DEFAULT_ULTRAGOAL_OBJECTIVE } from "./goal-mode-request";
+import { latestUltragoalLedgerEventFromText } from "./ledger-event-renderer";
 import { renderUltragoalStatusMarkdown } from "./state-renderer";
 import { reconcileWorkflowSkillState } from "./state-runtime";
 import { appendJsonl, writeArtifact, writeJsonAtomic } from "./state-writer";
@@ -2127,6 +2128,17 @@ async function reconcileUltragoalState(cwd: string): Promise<void> {
 			goals_path: summary.paths.goalsPath,
 		};
 		if (summary.gjcObjective) payload.gjc_objective = summary.gjcObjective;
+		const ledgerText = await Bun.file(summary.paths.ledgerPath)
+			.text()
+			.catch(() => "");
+		const latestLedger = latestUltragoalLedgerEventFromText(ledgerText);
+		if (latestLedger) {
+			payload.latestLedgerEvent = {
+				event: latestLedger.event,
+				...(latestLedger.goalId ? { goalId: latestLedger.goalId } : {}),
+				...(latestLedger.timestamp ? { timestamp: latestLedger.timestamp } : {}),
+			};
+		}
 		await reconcileWorkflowSkillState({ cwd, mode: "ultragoal", sessionId, active, phase: status, payload });
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
