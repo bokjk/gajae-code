@@ -45,9 +45,9 @@ struct ShellSessionCore {
 #[derive(Default)]
 struct ShellAbortInner {
 	generation: usize,
-	tokens: HashMap<usize, AbortToken>,
-	active: HashSet<usize>,
-	pending: bool,
+	tokens:     HashMap<usize, AbortToken>,
+	active:     HashSet<usize>,
+	pending:    bool,
 }
 
 #[derive(Clone, Default)]
@@ -98,73 +98,73 @@ impl ShellAbortState {
 
 #[derive(Clone)]
 struct ShellConfig {
-	session_env: Option<HashMap<String, String>>,
+	session_env:   Option<HashMap<String, String>>,
 	snapshot_path: Option<String>,
-	minimizer: Option<minimizer::MinimizerConfig>,
+	minimizer:     Option<minimizer::MinimizerConfig>,
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct ShellOptions {
-	pub session_env: Option<HashMap<String, String>>,
+	pub session_env:   Option<HashMap<String, String>>,
 	pub snapshot_path: Option<String>,
-	pub minimizer: Option<minimizer::MinimizerOptions>,
+	pub minimizer:     Option<minimizer::MinimizerOptions>,
 }
 
 struct ShellRunConfig {
-	command: String,
-	cwd: Option<String>,
-	env: Option<HashMap<String, String>>,
+	command:   String,
+	cwd:       Option<String>,
+	env:       Option<HashMap<String, String>>,
 	minimizer: Option<minimizer::MinimizerConfig>,
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct ShellRunOptions {
-	pub command: String,
-	pub cwd: Option<String>,
-	pub env: Option<HashMap<String, String>>,
+	pub command:    String,
+	pub cwd:        Option<String>,
+	pub env:        Option<HashMap<String, String>>,
 	pub timeout_ms: Option<u32>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct MinimizerResult {
-	pub filter: String,
-	pub text: String,
+	pub filter:        String,
+	pub text:          String,
 	pub original_text: String,
-	pub input_bytes: u32,
-	pub output_bytes: u32,
+	pub input_bytes:   u32,
+	pub output_bytes:  u32,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ShellRunResult {
-	pub exit_code: Option<i32>,
-	pub cancelled: bool,
-	pub timed_out: bool,
-	pub minimized: Option<MinimizerResult>,
-	pub output_truncated: bool,
+	pub exit_code:              Option<i32>,
+	pub cancelled:              bool,
+	pub timed_out:              bool,
+	pub minimized:              Option<MinimizerResult>,
+	pub output_truncated:       bool,
 	pub output_truncated_bytes: u64,
-	pub stdout_truncated: bool,
+	pub stdout_truncated:       bool,
 	pub stdout_truncated_bytes: u64,
-	pub stderr_truncated: bool,
+	pub stderr_truncated:       bool,
 	pub stderr_truncated_bytes: u64,
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct ShellExecuteOptions {
-	pub command: String,
-	pub cwd: Option<String>,
-	pub env: Option<HashMap<String, String>>,
-	pub session_env: Option<HashMap<String, String>>,
-	pub timeout_ms: Option<u32>,
+	pub command:       String,
+	pub cwd:           Option<String>,
+	pub env:           Option<HashMap<String, String>>,
+	pub session_env:   Option<HashMap<String, String>>,
+	pub timeout_ms:    Option<u32>,
 	pub snapshot_path: Option<String>,
-	pub minimizer: Option<minimizer::MinimizerOptions>,
+	pub minimizer:     Option<minimizer::MinimizerOptions>,
 }
 
 pub type ShellExecuteResult = ShellRunResult;
 
 pub struct Shell {
-	session: Arc<TokioMutex<Option<ShellSessionCore>>>,
+	session:     Arc<TokioMutex<Option<ShellSessionCore>>>,
 	abort_state: ShellAbortState,
-	config: ShellConfig,
+	config:      ShellConfig,
 }
 
 impl Shell {
@@ -198,9 +198,9 @@ impl Shell {
 		mut cancel_token: CancelToken,
 	) -> Result<ShellRunResult> {
 		let run_config = ShellRunConfig {
-			command: options.command,
-			cwd: options.cwd,
-			env: options.env,
+			command:   options.command,
+			cwd:       options.cwd,
+			env:       options.env,
 			minimizer: self.config.minimizer.clone(),
 		};
 		run_shell_session(
@@ -229,9 +229,9 @@ pub async fn execute_shell(
 		.as_ref()
 		.map(minimizer::MinimizerConfig::from_options);
 	let config = ShellConfig {
-		session_env: options.session_env,
+		session_env:   options.session_env,
 		snapshot_path: options.snapshot_path,
-		minimizer: minimizer.clone(),
+		minimizer:     minimizer.clone(),
 	};
 	let run_config =
 		ShellRunConfig { command: options.command, cwd: options.cwd, env: options.env, minimizer };
@@ -261,14 +261,14 @@ pub async fn execute_shell_streams(
 	cancel_token: CancelToken,
 ) -> Result<ShellExecuteResult> {
 	let config = ShellConfig {
-		session_env: options.session_env,
+		session_env:   options.session_env,
 		snapshot_path: options.snapshot_path,
-		minimizer: None,
+		minimizer:     None,
 	};
 	let run_config = ShellRunConfig {
-		command: options.command,
-		cwd: options.cwd,
-		env: options.env,
+		command:   options.command,
+		cwd:       options.cwd,
+		env:       options.env,
 		minimizer: None,
 	};
 	run_shell_oneshot_streams(config, run_config, streams, cancel_token).await
@@ -463,15 +463,15 @@ async fn run_shell_oneshot_streams(
 		.unwrap_or_else(|err| Err(Error::msg(format!("Shell execution task failed: {err}"))));
 	let (exec, truncation) = res?;
 	Ok(ShellExecuteResult {
-		exit_code: Some(exit_code(&exec)),
-		cancelled: false,
-		timed_out: false,
-		minimized: None,
-		output_truncated: truncation.output_truncated,
+		exit_code:              Some(exit_code(&exec)),
+		cancelled:              false,
+		timed_out:              false,
+		minimized:              None,
+		output_truncated:       truncation.output_truncated,
 		output_truncated_bytes: truncation.output_truncated_bytes,
-		stdout_truncated: truncation.stdout_truncated,
+		stdout_truncated:       truncation.stdout_truncated,
 		stdout_truncated_bytes: truncation.stdout_truncated_bytes,
-		stderr_truncated: truncation.stderr_truncated,
+		stderr_truncated:       truncation.stderr_truncated,
 		stderr_truncated_bytes: truncation.stderr_truncated_bytes,
 	})
 }
@@ -859,15 +859,11 @@ async fn run_shell_command(
 		}
 	}
 	let truncated_bytes = output_budget.truncated_bytes();
-	Ok((
-		result,
-		minimized_out,
-		OutputTruncation {
-			output_truncated: truncated_bytes > 0,
-			output_truncated_bytes: truncated_bytes,
-			..Default::default()
-		},
-	))
+	Ok((result, minimized_out, OutputTruncation {
+		output_truncated: truncated_bytes > 0,
+		output_truncated_bytes: truncated_bytes,
+		..Default::default()
+	}))
 }
 
 async fn run_shell_command_streams(
@@ -1025,16 +1021,13 @@ async fn run_shell_command_streams(
 	let result = result.map_err(|err| Error::msg(format!("Shell execution failed: {err}")))?;
 	let stdout_truncated_bytes = stdout_budget.truncated_bytes();
 	let stderr_truncated_bytes = stderr_budget.truncated_bytes();
-	Ok((
-		result,
-		OutputTruncation {
-			stdout_truncated: stdout_truncated_bytes > 0,
-			stdout_truncated_bytes,
-			stderr_truncated: stderr_truncated_bytes > 0,
-			stderr_truncated_bytes,
-			..Default::default()
-		},
-	))
+	Ok((result, OutputTruncation {
+		stdout_truncated: stdout_truncated_bytes > 0,
+		stdout_truncated_bytes,
+		stderr_truncated: stderr_truncated_bytes > 0,
+		stderr_truncated_bytes,
+		..Default::default()
+	}))
 }
 
 async fn read_output_bytes(
@@ -1298,17 +1291,17 @@ enum OutputRead {
 }
 
 struct BufferedOutput {
-	text: String,
+	text:     String,
 	exceeded: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
 struct OutputTruncation {
-	output_truncated: bool,
+	output_truncated:       bool,
 	output_truncated_bytes: u64,
-	stdout_truncated: bool,
+	stdout_truncated:       bool,
 	stdout_truncated_bytes: u64,
-	stderr_truncated: bool,
+	stderr_truncated:       bool,
 	stderr_truncated_bytes: u64,
 }
 
@@ -1746,7 +1739,7 @@ struct TimeoutCommand {
 	#[arg(required = true)]
 	duration: String,
 	#[arg(required = true, num_args = 1.., trailing_var_arg = true)]
-	command: Vec<String>,
+	command:  Vec<String>,
 }
 
 impl builtins::Command for TimeoutCommand {
@@ -2344,7 +2337,10 @@ mod tests {
 			.expect("spawn unrelated sibling");
 		let sibling_pid = i32::try_from(sibling.id()).expect("sibling pid should fit i32");
 		let (tx, mut rx) = mpsc::unbounded_channel::<String>();
-		let command = "timeout 0.2 perl -e 'if (($pid = fork()) == 0) { $SIG{TERM} = \"IGNORE\"; print qq(grandchild=$$ ppid=) . getppid() . qq( pgid=) . getpgrp() . qq(\\n); $| = 1; sleep 30; exit 0; } print qq(parent=$$ child=$pid pgid=) . getpgrp() . qq(\\n); $| = 1; sleep 30;'";
+		let command = "timeout 0.2 perl -e 'if (($pid = fork()) == 0) { $SIG{TERM} = \"IGNORE\"; \
+		               print qq(grandchild=$$ ppid=) . getppid() . qq( pgid=) . getpgrp() . \
+		               qq(\\n); $| = 1; sleep 30; exit 0; } print qq(parent=$$ child=$pid pgid=) . \
+		               getpgrp() . qq(\\n); $| = 1; sleep 30;'";
 		let result = execute_shell(
 			ShellExecuteOptions { command: command.to_string(), ..Default::default() },
 			Some(tx),
@@ -2378,7 +2374,8 @@ mod tests {
 			.expect("sibling should still be alive")
 			.kill_tree(Some(process::KILL_SIGNAL));
 		panic!(
-			"timeout left reparented grandchild {grandchild_pid} alive or killed sibling; output={output:?}"
+			"timeout left reparented grandchild {grandchild_pid} alive or killed sibling; \
+			 output={output:?}"
 		);
 	}
 
@@ -2395,7 +2392,10 @@ mod tests {
 		let cancel = CancelToken::default();
 		let abort = cancel.clone().emplace_abort_token();
 		let (tx, mut rx) = mpsc::unbounded_channel::<String>();
-		let command = "perl -e 'if (($pid = fork()) == 0) { $SIG{TERM} = \"IGNORE\"; print qq(grandchild=$$ ppid=) . getppid() . qq( pgid=) . getpgrp() . qq(\\n); $| = 1; sleep 30; exit 0; } print qq(parent=$$ child=$pid pgid=) . getpgrp() . qq(\\n); exit 0;'; sleep 30";
+		let command = "perl -e 'if (($pid = fork()) == 0) { $SIG{TERM} = \"IGNORE\"; print \
+		               qq(grandchild=$$ ppid=) . getppid() . qq( pgid=) . getpgrp() . qq(\\n); $| = \
+		               1; sleep 30; exit 0; } print qq(parent=$$ child=$pid pgid=) . getpgrp() . \
+		               qq(\\n); exit 0;'; sleep 30";
 		let run = tokio::spawn(execute_shell(
 			ShellExecuteOptions { command: command.to_string(), ..Default::default() },
 			Some(tx),

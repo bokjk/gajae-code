@@ -31,8 +31,8 @@ mod platform {
 	/// Stable Linux process reference backed by a pidfd.
 	#[derive(Clone)]
 	pub struct Process {
-		pid: i32,
-		pidfd: Arc<OwnedFd>,
+		pid:        i32,
+		pidfd:      Arc<OwnedFd>,
 		start_time: u64,
 	}
 
@@ -309,8 +309,8 @@ mod platform {
 	/// original target.
 	#[derive(Clone)]
 	pub struct Process {
-		pid: i32,
-		start_tvsec: u64,
+		pid:          i32,
+		start_tvsec:  u64,
 		start_tvusec: u64,
 	}
 
@@ -672,16 +672,16 @@ mod platform {
 	#[repr(C)]
 	#[allow(non_snake_case, reason = "Windows PROCESSENTRY32W field names must match Win32 ABI")]
 	struct PROCESSENTRY32W {
-		dwSize: u32,
-		cntUsage: u32,
-		th32ProcessID: u32,
-		th32DefaultHeapID: usize,
-		th32ModuleID: u32,
-		cntThreads: u32,
+		dwSize:              u32,
+		cntUsage:            u32,
+		th32ProcessID:       u32,
+		th32DefaultHeapID:   usize,
+		th32ModuleID:        u32,
+		cntThreads:          u32,
 		th32ParentProcessID: u32,
-		pcPriClassBase: i32,
-		dwFlags: u32,
-		szExeFile: [u16; 260],
+		pcPriClassBase:      i32,
+		dwFlags:             u32,
+		szExeFile:           [u16; 260],
 	}
 
 	#[repr(C)]
@@ -697,35 +697,35 @@ mod platform {
 	#[repr(C)]
 	#[derive(Clone, Copy)]
 	struct UnicodeString {
-		length: u16,
+		length:         u16,
 		maximum_length: u16,
-		buffer: usize,
+		buffer:         usize,
 	}
 
 	#[repr(C)]
 	#[derive(Clone, Copy)]
 	struct PebPartial {
-		reserved1: [u8; 2],
-		being_debugged: u8,
-		reserved2: [u8; 1],
-		reserved3: [usize; 2],
-		loader: usize,
+		reserved1:          [u8; 2],
+		being_debugged:     u8,
+		reserved2:          [u8; 1],
+		reserved3:          [usize; 2],
+		loader:             usize,
 		process_parameters: usize,
 	}
 
 	#[repr(C)]
 	#[derive(Clone, Copy)]
 	struct UserProcessParametersPartial {
-		reserved1: [u8; 16],
-		reserved2: [usize; 10],
+		reserved1:       [u8; 16],
+		reserved2:       [usize; 10],
 		image_path_name: UnicodeString,
-		command_line: UnicodeString,
+		command_line:    UnicodeString,
 	}
 
 	#[repr(C)]
 	#[derive(Clone, Copy, Default)]
 	struct Filetime {
-		dw_low_date_time: u32,
+		dw_low_date_time:  u32,
 		dw_high_date_time: u32,
 	}
 
@@ -824,8 +824,8 @@ mod platform {
 	/// the kernel-reported creation time, which pins identity even if the PID is
 	/// recycled while we hold the handle.
 	pub struct Process {
-		pid: i32,
-		handle: Arc<OwnedHandle>,
+		pid:           i32,
+		handle:        Arc<OwnedHandle>,
 		creation_time: u64,
 	}
 
@@ -1137,16 +1137,16 @@ mod platform {
 
 	fn process_entry() -> PROCESSENTRY32W {
 		PROCESSENTRY32W {
-			dwSize: mem::size_of::<PROCESSENTRY32W>() as u32,
-			cntUsage: 0,
-			th32ProcessID: 0,
-			th32DefaultHeapID: 0,
-			th32ModuleID: 0,
-			cntThreads: 0,
+			dwSize:              mem::size_of::<PROCESSENTRY32W>() as u32,
+			cntUsage:            0,
+			th32ProcessID:       0,
+			th32DefaultHeapID:   0,
+			th32ModuleID:        0,
+			cntThreads:          0,
 			th32ParentProcessID: 0,
-			pcPriClassBase: 0,
-			dwFlags: 0,
-			szExeFile: [0; 260],
+			pcPriClassBase:      0,
+			dwFlags:             0,
+			szExeFile:           [0; 260],
 		}
 	}
 
@@ -1503,7 +1503,7 @@ pub const KILL_SIGNAL: i32 = 9;
 /// on platforms that do not expose process groups.
 #[derive(Default)]
 pub struct TerminationTargets {
-	pgids: Vec<i32>,
+	pgids:     Vec<i32>,
 	processes: Vec<Process>,
 	seen_pids: HashSet<i32>,
 }
@@ -1597,7 +1597,7 @@ pub fn add_new_descendants<S: std::hash::BuildHasher>(
 /// platform-specific process handles.
 #[derive(Debug, Clone, Copy)]
 struct DescendantInfo {
-	pid: i32,
+	pid:  i32,
 	pgid: Option<i32>,
 }
 
@@ -1605,7 +1605,7 @@ struct DescendantInfo {
 #[derive(Debug, Default)]
 struct TargetSelection {
 	pgids: Vec<i32>,
-	pids: Vec<i32>,
+	pids:  Vec<i32>,
 }
 
 /// Pure target-classifier separated from process discovery so it is testable
@@ -1672,10 +1672,10 @@ mod tests {
 		// Harness pgid is *not* a new descendant; a baseline helper happens to
 		// lead a group that a new descendant inherited. Neither pgid is safe to
 		// signal as a group.
-		let descendants = [
-			DescendantInfo { pid: 2000, pgid: Some(HARNESS_PGID) },
-			DescendantInfo { pid: 2001, pgid: Some(BASELINE_HELPER_PID) },
-		];
+		let descendants = [DescendantInfo { pid: 2000, pgid: Some(HARNESS_PGID) }, DescendantInfo {
+			pid:  2001,
+			pgid: Some(BASELINE_HELPER_PID),
+		}];
 		let baseline: HashSet<i32> = std::iter::once(BASELINE_HELPER_PID).collect();
 
 		let selection = select_termination_targets(&descendants, &baseline);
