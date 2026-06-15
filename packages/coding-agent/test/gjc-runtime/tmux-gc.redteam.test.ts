@@ -170,7 +170,10 @@ describe("tmux GC red-team adversarial safety", () => {
 			if (cmd.includes("list-sessions")) {
 				const format = cmd[cmd.indexOf("-F") + 1] ?? "";
 				if (format === "#{session_name}") return spawnResult(0, "gajae_code_idle_orphan\n");
-				return spawnResult(0, sessionLine({ name: "gajae_code_idle_orphan", profile: "1", created: 1_770_000_000 }));
+				return spawnResult(
+					0,
+					sessionLine({ name: "gajae_code_idle_orphan", profile: "1", created: 1_770_000_000 }),
+				);
 			}
 			if (optionValue(cmd, "@gjc-profile")) return spawnResult(0, "1\n");
 			if (cmd.includes("show-options")) return spawnResult(0, "\n");
