@@ -138,6 +138,16 @@
         "postcss": "catalog:",
       },
     },
+    "packages/telegram-remote": {
+      "name": "@gajae-code/telegram-remote",
+      "version": "0.0.1",
+      "bin": {
+        "gjc-telegram-remote": "./src/cli.ts",
+      },
+      "devDependencies": {
+        "@types/bun": "catalog:",
+      },
+    },
     "packages/tui": {
       "name": "@gajae-code/tui",
       "version": "0.5.1",
@@ -409,6 +419,8 @@
     "@gajae-code/orchestration-token-benchmark": ["@gajae-code/orchestration-token-benchmark@workspace:packages/orchestration-token-benchmark"],
 
     "@gajae-code/stats": ["@gajae-code/stats@workspace:packages/stats"],
+
+    "@gajae-code/telegram-remote": ["@gajae-code/telegram-remote@workspace:packages/telegram-remote"],
 
     "@gajae-code/tui": ["@gajae-code/tui@workspace:packages/tui"],
 

@@ -265,6 +265,7 @@ Each step is independently shippable; later steps stay fail-closed until wired.
 - Web "steering wheel" remote (sibling roadmap, harness/bridge-backed): [`docs/gajae-remote.md`](gajae-remote.md)
 - Bridge transport / fail-closed posture (why no second protocol): [`docs/bridge.md`](bridge.md)
 - RPC command/response contract and error shapes: [`docs/rpc.md`](rpc.md)
+- v0 reference implementation (this contract, as a small companion service): [`packages/telegram-remote`](../packages/telegram-remote/README.md)
 
 —
 *[repo owner's gaebal-gajae (clawdbot) 🦞]*

@@ -1,0 +1,171 @@
+/**
+ * Environment-driven configuration for the gateway service. Builds the
+ * authorization policy, preset map, and the coordinator subprocess spawn config
+ * (with a forced, smallest mutation set) from process env.
+ */
+import type { McpStdioOptions } from "./coordinator-client";
+import type { GatewayPolicy } from "./gateway";
+import { assertValidPreset } from "./presets";
+import type { GatewayPreset } from "./types";
+
+const DEFAULT_TASK_MAX_LEN = 2000;
+const DEFAULT_COORDINATOR_COMMAND = "gjc";
+const DEFAULT_COORDINATOR_ARGS = ["mcp-serve", "coordinator"];
+const WORKDIR_ROOT_SEPARATOR = ":";
+
+/** Fully resolved configuration for {@link runService}. */
+export interface ServiceConfig {
+	botToken: string;
+	apiBase?: string;
+	pollTimeoutSec: number;
+	policy: GatewayPolicy;
+	coordinator: McpStdioOptions;
+}
+
+type Env = Record<string, string | undefined>;
+
+function required(env: Env, key: string): string {
+	const value = env[key];
+	if (!value || value.trim().length === 0) throw new Error(`telegram_remote_missing_env:${key}`);
+	return value.trim();
+}
+
+function parseIdSet(value: string | undefined): Set<string> {
+	if (!value) return new Set();
+	return new Set(
+		value
+			.split(",")
+			.map(item => item.trim())
+			.filter(item => item.length > 0),
+	);
+}
+
+function parseList(value: string | undefined, fallback: string[]): string[] {
+	if (!value) return fallback;
+	const items = value
+		.split(",")
+		.map(item => item.trim())
+		.filter(item => item.length > 0);
+	return items.length > 0 ? items : fallback;
+}
+
+function parsePresets(value: string | undefined, defaultTaskMaxLen: number): Map<string, GatewayPreset> {
+	const presets = new Map<string, GatewayPreset>();
+	if (!value || value.trim().length === 0) return presets;
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(value);
+	} catch {
+		throw new Error("telegram_remote_presets_invalid_json");
+	}
+	if (!Array.isArray(parsed)) throw new Error("telegram_remote_presets_must_be_array");
+	for (const entry of parsed) {
+		if (typeof entry !== "object" || entry === null) throw new Error("telegram_remote_preset_must_be_object");
+		const record = entry as Record<string, unknown>;
+		const preset: GatewayPreset = {
+			id: String(record.id ?? ""),
+			workdir: String(record.workdir ?? ""),
+			sessionCommand: String(record.sessionCommand ?? ""),
+			taskTemplate: typeof record.taskTemplate === "string" ? record.taskTemplate : undefined,
+			taskMaxLen: typeof record.taskMaxLen === "number" ? record.taskMaxLen : defaultTaskMaxLen,
+		};
+		assertValidPreset(preset);
+		if (presets.has(preset.id)) throw new Error(`telegram_remote_duplicate_preset:${preset.id}`);
+		presets.set(preset.id, preset);
+	}
+	return presets;
+}
+
+function isInsideRoot(workdir: string, root: string): boolean {
+	return workdir === root || workdir.startsWith(`${root}/`);
+}
+
+function deriveWorkdirRoots(presets: Map<string, GatewayPreset>): string {
+	const roots = new Set<string>();
+	for (const preset of presets.values()) roots.add(preset.workdir);
+	return [...roots].join(WORKDIR_ROOT_SEPARATOR);
+}
+
+function resolveWorkdirRoots(env: Env, presets: Map<string, GatewayPreset>): string {
+	const explicit = env.GJC_COORDINATOR_MCP_WORKDIR_ROOTS?.trim();
+	const roots = explicit && explicit.length > 0 ? explicit : deriveWorkdirRoots(presets);
+	if (roots.length > 0) {
+		const rootList = roots.split(WORKDIR_ROOT_SEPARATOR).filter(item => item.length > 0);
+		for (const preset of presets.values()) {
+			if (!rootList.some(root => isInsideRoot(preset.workdir, root))) {
+				throw new Error(`telegram_remote_preset_workdir_outside_roots:${preset.id}`);
+			}
+		}
+	}
+	return roots;
+}
+
+function resolveSessionCommand(env: Env, presets: Map<string, GatewayPreset>): string {
+	const explicit = env.GJC_COORDINATOR_MCP_SESSION_COMMAND?.trim();
+	if (explicit && explicit.length > 0) return explicit;
+	const commands = new Set([...presets.values()].map(preset => preset.sessionCommand));
+	if (commands.size > 1) throw new Error("telegram_remote_ambiguous_session_command");
+	return commands.values().next().value ?? "";
+}
+
+function buildCoordinatorEnv(
+	env: Env,
+	presets: Map<string, GatewayPreset>,
+	enableStop: boolean,
+): Record<string, string> {
+	const coordinatorEnv: Record<string, string> = {};
+	for (const key of [
+		"GJC_COORDINATOR_MCP_PROFILE",
+		"GJC_COORDINATOR_MCP_REPO",
+		"GJC_COORDINATOR_MCP_STATE_ROOT",
+		"GJC_COORDINATOR_MCP_ARTIFACT_BYTE_CAP",
+	]) {
+		const value = env[key]?.trim();
+		if (value) coordinatorEnv[key] = value;
+	}
+	const workdirRoots = resolveWorkdirRoots(env, presets);
+	if (workdirRoots.length > 0) coordinatorEnv.GJC_COORDINATOR_MCP_WORKDIR_ROOTS = workdirRoots;
+	const sessionCommand = resolveSessionCommand(env, presets);
+	if (sessionCommand.length > 0) coordinatorEnv.GJC_COORDINATOR_MCP_SESSION_COMMAND = sessionCommand;
+	// Force the smallest mutation set. `questions` is never enabled.
+	coordinatorEnv.GJC_COORDINATOR_MCP_MUTATIONS = enableStop ? "sessions,reports" : "sessions";
+	return coordinatorEnv;
+}
+
+function isTruthy(value: string | undefined): boolean {
+	if (!value) return false;
+	const normalized = value.trim().toLowerCase();
+	return normalized === "1" || normalized === "true" || normalized === "yes";
+}
+
+/** Build the full service config from environment variables. */
+export function loadConfigFromEnv(env: Env): ServiceConfig {
+	const botToken = required(env, "GJC_TELEGRAM_REMOTE_BOT_TOKEN");
+	const defaultTaskMaxLen = Number.parseInt(env.GJC_TELEGRAM_REMOTE_DEFAULT_TASK_MAX_LEN ?? "", 10);
+	const taskMaxLen =
+		Number.isInteger(defaultTaskMaxLen) && defaultTaskMaxLen > 0 ? defaultTaskMaxLen : DEFAULT_TASK_MAX_LEN;
+
+	const allowedUserIds = parseIdSet(env.GJC_TELEGRAM_REMOTE_ALLOWED_USER_IDS);
+	const allowedChatIds = parseIdSet(env.GJC_TELEGRAM_REMOTE_ALLOWED_CHAT_IDS);
+	if (allowedUserIds.size === 0 && allowedChatIds.size === 0) {
+		throw new Error("telegram_remote_no_allowlist");
+	}
+
+	const presets = parsePresets(env.GJC_TELEGRAM_REMOTE_PRESETS, taskMaxLen);
+	const enableStop = isTruthy(env.GJC_TELEGRAM_REMOTE_ENABLE_STOP);
+
+	const pollTimeout = Number.parseInt(env.GJC_TELEGRAM_REMOTE_POLL_TIMEOUT_SEC ?? "", 10);
+	const pollTimeoutSec = Number.isInteger(pollTimeout) && pollTimeout > 0 ? pollTimeout : 30;
+
+	return {
+		botToken,
+		apiBase: env.GJC_TELEGRAM_REMOTE_API_BASE?.trim() || undefined,
+		pollTimeoutSec,
+		policy: { allowedUserIds, allowedChatIds, presets, enableStop },
+		coordinator: {
+			command: env.GJC_TELEGRAM_REMOTE_COORDINATOR_COMMAND?.trim() || DEFAULT_COORDINATOR_COMMAND,
+			args: parseList(env.GJC_TELEGRAM_REMOTE_COORDINATOR_ARGS, DEFAULT_COORDINATOR_ARGS),
+			env: buildCoordinatorEnv(env, presets, enableStop),
+		},
+	};
+}
