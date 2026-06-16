@@ -113,15 +113,29 @@ describe("TelegramBotApiTransport", () => {
 		expect(calls.some(c => c.method === "sendMessage")).toBe(false);
 	});
 
-	test("edit path uses editMessageText then falls back to sendMessage on API failure", async () => {
+	test("edit path falls back to sendMessage with identical text/buttons on API failure", async () => {
+		const reply: OutgoingReply = {
+			kind: "chat",
+			text: "refreshed",
+			parseMode: "HTML",
+			replyMarkup: { inline_keyboard: [[{ text: "Refresh", callbackData: "gtr:v1:r" }]] },
+			edit: { messageId: 5 },
+		};
 		const calls = await runOnce(
 			[callbackUpdate],
-			async () => ({ kind: "chat", text: "refreshed", edit: { messageId: 5 } }),
+			async () => reply,
 			{ enableEditMessageText: true },
 			{ editMessageText: { ok: false } },
 		);
-		expect(calls.some(c => c.method === "editMessageText")).toBe(true);
-		expect(calls.some(c => c.method === "sendMessage")).toBe(true);
+		const edit = calls.find(c => c.method === "editMessageText");
+		const send = calls.find(c => c.method === "sendMessage");
+		expect(edit).toBeDefined();
+		expect(send).toBeDefined();
+		// Fallback carries the SAME text + buttons as the attempted edit (shared messageBody).
+		expect(edit?.body.text).toBe("refreshed");
+		expect(send?.body.text).toBe("refreshed");
+		const sendMarkup = send?.body.reply_markup as { inline_keyboard: Array<Array<{ callback_data: string }>> };
+		expect(sendMarkup.inline_keyboard[0]?.[0]?.callback_data).toBe("gtr:v1:r");
 	});
 
 	test("drops oversized callback_data locally (never delivered as a command)", async () => {

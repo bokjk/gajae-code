@@ -223,7 +223,7 @@ export class TelegramRemoteGateway {
 		const { token, record } = resolution;
 		switch (record.action) {
 			case "observe":
-				return this.callbackObserve(record, ctx, null);
+			// Observe from a list row edits the originating list message in place (no sticky focus).
 			case "refresh_observe":
 				return this.callbackObserve(record, ctx, update.messageId);
 			case "stop_arm":

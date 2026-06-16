@@ -466,4 +466,14 @@ describe("rich multi-session browsing", () => {
 		expect(reply.text).toContain("needle-branch");
 		expect(reply.text).not.toContain("sess-02");
 	});
+
+	test("Observe from a list row edits the originating list message in place", async () => {
+		coordinator.status = browsingStatus(3);
+		const gateway = makeGateway({ enableRichMessages: true });
+		const list = asChat(await gateway.handleUpdate(message({ text: "/sessions" })));
+		const observe = buttons(list).find(b => b.text.startsWith("Observe"))!;
+		const reply = asChat(await gateway.handleUpdate(callback({ data: observe.callbackData, messageId: 77 })));
+		expect(reply.edit).toEqual({ messageId: 77 });
+		expect(reply.text).toContain("status:");
+	});
 });
