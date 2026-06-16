@@ -89,7 +89,13 @@ describe("rlm notebook writer", () => {
 	test("error cells route to stderr stream and do not corrupt the notebook", async () => {
 		const nbPath = path.join(tmp, "notebook.ipynb");
 		const writer = new RlmNotebookWriter(nbPath);
-		await writer.appendCode("boom()", { output: "NameError\n", exitCode: 1, cancelled: false, truncated: false, displayOutputs: [] });
+		await writer.appendCode("boom()", {
+			output: "NameError\n",
+			exitCode: 1,
+			cancelled: false,
+			truncated: false,
+			displayOutputs: [],
+		});
 		await writer.flush();
 		const doc = await readNotebookDocument(nbPath, nbPath);
 		const outputs = doc.cells[0].outputs as Array<Record<string, unknown>>;
@@ -138,7 +144,15 @@ describe("rlm report synthesis", () => {
 		expect(report).toContain("print('hi')");
 		expect(report).toContain("hi");
 		// Deterministic: same input → same output.
-		expect(synthesizeRlmReport({ title: "My Research", summary: "Found something.", notebook, dataPath: "/tmp/DATA.md", generatedAt: "2026-01-01T00:00:00Z" })).toBe(report);
+		expect(
+			synthesizeRlmReport({
+				title: "My Research",
+				summary: "Found something.",
+				notebook,
+				dataPath: "/tmp/DATA.md",
+				generatedAt: "2026-01-01T00:00:00Z",
+			}),
+		).toBe(report);
 	});
 });
 

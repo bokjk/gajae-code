@@ -19,7 +19,9 @@ export interface RlmPythonToolContext {
 }
 
 const paramsSchema = z.object({
-	code: z.string().describe("Python source to execute in the persistent research kernel. State persists across calls."),
+	code: z
+		.string()
+		.describe("Python source to execute in the persistent research kernel. State persists across calls."),
 });
 
 export function createRlmPythonTool(rlm: RlmPythonToolContext): CustomTool<typeof paramsSchema> {
