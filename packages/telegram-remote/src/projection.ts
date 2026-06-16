@@ -14,6 +14,17 @@ const TERMINAL_TURN_STATUSES = new Set(["completed", "failed", "cancelled", "sup
 const NAME_MAX_LEN = 48;
 const BRANCH_MAX_LEN = 64;
 const BLOCKER_MAX_LEN = 120;
+// Short display id: keep <=12 ids as-is, otherwise `first8…last4` so a long raw id never reaches chat.
+const SHORT_ID_KEEP_MAX = 12;
+const SHORT_ID_PREFIX = 8;
+const SHORT_ID_SUFFIX = 4;
+// Terminal/dead sessions stay browseable for 24h after their last activity.
+export const RETENTION_DEFAULT_MS = 24 * 60 * 60 * 1000;
+// Coordinator session states that map to a non-recoverable, gone/retained-dead session.
+// Fail-closed: any of these (or live === false) projects to `dead` so control guards refuse.
+const DEAD_SESSION_STATES = new Set(["stale", "unavailable", "dead"]);
+// Terminal projected statuses (no further work expected from the session).
+const TERMINAL_STATUSES = new Set<SessionStatus>(["done", "failed", "cancelled", "dead"]);
 // Strict ISO-8601 instant; anything else in a timestamp key is treated as withheld.
 const ISO_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/;
 
@@ -63,14 +74,92 @@ function activeTurnOf(sessionTurns: RawRecord[]): RawRecord | null {
 	return null;
 }
 
-/** Derive the bounded status enum from session state and the active turn. */
-export function deriveStatus(sessionState: RawRecord | null, activeTurn: RawRecord | null): SessionStatus {
-	if (sessionState && sessionState.live === false) return "offline";
+/**
+ * Derive the bounded status enum from session state, the active turn, and the latest turn.
+ *
+ * Precedence is locked by fixtures (test/projection.test.ts) so dependent browsing/notifier
+ * code never re-guesses status semantics:
+ *  1. liveness false / `stale` state -> `dead`
+ *  2. waiting_for_answer turn or `needs_user_input` state -> `waiting_for_input`
+ *  3. deliberate blocker signal (`state === "blocked"` or `blocked === true`) -> `blocked`
+ *  4. `errored` state or `failed` latest turn -> `failed`
+ *  5. `cancelled` latest turn -> `cancelled`
+ *  6. `completed` state -> `done`
+ *  7. `running`/active turn/`ready_for_input`/`booting` -> `working`
+ *  8. `completed`/`superseded` latest turn (no live state) -> `done`
+ */
+export function deriveStatus(
+	sessionState: RawRecord | null,
+	activeTurn: RawRecord | null,
+	latestTurn: RawRecord | null = null,
+): SessionStatus {
+	if (sessionState && sessionState.live === false) return "dead";
 	const state = sessionState ? readString(sessionState, "state") : null;
-	const turnStatus = activeTurn ? readString(activeTurn, "status") : null;
-	if (turnStatus === "waiting_for_answer" || state === "needs_user_input" || state === "errored") return "blocked";
-	if (activeTurn || state === "running") return "working";
-	return "idle";
+	if (state && DEAD_SESSION_STATES.has(state)) return "dead";
+	const activeStatus = activeTurn ? readString(activeTurn, "status") : null;
+	const latestStatus = latestTurn ? readString(latestTurn, "status") : null;
+	if (activeStatus === "waiting_for_answer" || state === "needs_user_input") return "waiting_for_input";
+	if (state === "blocked" || sessionState?.blocked === true) return "blocked";
+	if (state === "errored" || latestStatus === "failed") return "failed";
+	if (latestStatus === "cancelled") return "cancelled";
+	if (state === "completed") return "done";
+	if (state === "running" || activeStatus !== null || state === "ready_for_input" || state === "booting") {
+		return "working";
+	}
+	if (latestStatus === "completed" || latestStatus === "superseded") return "done";
+	return "working";
+}
+
+/** True for projected statuses that represent no further expected work. */
+export function isTerminalStatus(status: SessionStatus): boolean {
+	return TERMINAL_STATUSES.has(status);
+}
+
+/** Short display id: `<=12` chars stay as-is, longer raw ids collapse to `first8…last4`. */
+export function shortSessionId(rawSessionId: string): string {
+	// Strip control chars / collapse whitespace, but do NOT length-cap here: capping would
+	// inject its own ellipsis and corrupt the first8…last4 form. Renderers escape the result.
+	const cleaned = rawSessionId
+		.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ")
+		.replace(/\s+/g, " ")
+		.trim();
+	if (cleaned.length <= SHORT_ID_KEEP_MAX) return cleaned;
+	return `${cleaned.slice(0, SHORT_ID_PREFIX)}…${cleaned.slice(-SHORT_ID_SUFFIX)}`;
+}
+
+/**
+ * Render an ISO instant as a coarse relative time (`just now`, `5m ago`, `2h ago`, `3d ago`).
+ * Invalid/missing timestamps and future instants fall back safely.
+ */
+export function formatRelativeTime(iso: string | null, now: number): string {
+	if (!iso || !ISO_TIMESTAMP.test(iso)) return MESSAGES.withheld;
+	const then = Date.parse(iso);
+	if (Number.isNaN(then)) return MESSAGES.withheld;
+	const deltaMs = now - then;
+	if (deltaMs < 60_000) return "just now";
+	const minutes = Math.floor(deltaMs / 60_000);
+	if (minutes < 60) return `${minutes}m ago`;
+	const hours = Math.floor(minutes / 60);
+	if (hours < 24) return `${hours}h ago`;
+	const days = Math.floor(hours / 24);
+	return `${days}d ago`;
+}
+
+/**
+ * Eligibility helper for browsing: a terminal/dead session stays listed until its last
+ * activity is older than the retention window; live (non-terminal) sessions are always eligible.
+ */
+export function isWithinRetention(
+	status: SessionStatus,
+	lastActivityAt: string | null,
+	now: number,
+	ttlMs: number = RETENTION_DEFAULT_MS,
+): boolean {
+	if (!isTerminalStatus(status)) return true;
+	if (!lastActivityAt || !ISO_TIMESTAMP.test(lastActivityAt)) return false;
+	const then = Date.parse(lastActivityAt);
+	if (Number.isNaN(then)) return false;
+	return now - then <= ttlMs;
 }
 
 /** Derive the bounded turn-activity enum, with no turn body or content. */
@@ -86,7 +175,7 @@ export function deriveTurnActivity(sessionTurns: RawRecord[], activeTurn: RawRec
 function deriveName(session: RawRecord, sessionId: string, branch: string | null): string {
 	const repo = readString(session, "repo");
 	if (repo && branch) return sanitizeLine(`${repo}@${branch}`, NAME_MAX_LEN);
-	return sanitizeLine(sessionId, NAME_MAX_LEN);
+	return shortSessionId(sessionId);
 }
 
 function deriveBranch(session: RawRecord, sessionState: RawRecord | null): string | null {
@@ -126,11 +215,12 @@ function deriveSession(session: RawRecord, sessionStates: RawRecord[], turns: Ra
 	const sessionState = indexBySessionId(sessionStates).get(sessionId) ?? null;
 	const sessionTurns = turnsForSession(turns, sessionId);
 	const activeTurn = activeTurnOf(sessionTurns);
+	const latestTurn = sessionTurns.length > 0 ? (sessionTurns[sessionTurns.length - 1] as RawRecord) : null;
 	const branch = deriveBranch(session, sessionState);
 	return {
-		sessionId: sanitizeLine(sessionId, NAME_MAX_LEN),
+		sessionId: shortSessionId(sessionId),
 		name: deriveName(session, sessionId, branch),
-		status: deriveStatus(sessionState, activeTurn),
+		status: deriveStatus(sessionState, activeTurn, latestTurn),
 		branch,
 		lastActivityAt: deriveLastActivity(session, sessionState),
 		sessionState,
@@ -208,14 +298,16 @@ export function renderSessionsList(summaries: SessionSummary[]): string {
 }
 
 /** Render the allowlisted open-session view into a concise chat message. */
-export function renderSessionView(view: SessionView): string {
+export function renderSessionView(view: SessionView, now?: number): string {
+	const last =
+		now !== undefined ? formatRelativeTime(view.lastActivityAt, now) : (view.lastActivityAt ?? MESSAGES.withheld);
 	const lines = [
 		view.name,
 		`id: ${view.sessionId}`,
 		`status: ${view.status}`,
 		`turn: ${view.activeTurn}`,
 		`branch: ${view.branch ?? MESSAGES.withheld}`,
-		`last: ${view.lastActivityAt ?? MESSAGES.withheld}`,
+		`last: ${last}`,
 	];
 	if (view.status === "blocked") {
 		lines.push(`blocked: ${view.blockerSummary ?? MESSAGES.withheld}`);
@@ -261,14 +353,20 @@ export function renderSessionsListHtml(summaries: SessionSummary[]): string {
 }
 
 /** Render the allowlisted open-session view as HTML (presentation only; same fields). */
-export function renderSessionViewHtml(view: SessionView): string {
+export function renderSessionViewHtml(view: SessionView, now?: number): string {
+	const last =
+		now !== undefined
+			? formatRelativeTime(view.lastActivityAt, now)
+			: view.lastActivityAt
+				? escapeHtml(view.lastActivityAt)
+				: MESSAGES.withheld;
 	const lines = [
 		`<b>${escapeHtml(view.name)}</b>`,
 		`id: <code>${escapeHtml(view.sessionId)}</code>`,
 		`status: <b>${escapeHtml(view.status)}</b>`,
 		`turn: ${escapeHtml(view.activeTurn)}`,
 		`branch: ${view.branch ? escapeHtml(view.branch) : MESSAGES.withheld}`,
-		`last: ${view.lastActivityAt ? escapeHtml(view.lastActivityAt) : MESSAGES.withheld}`,
+		`last: ${last}`,
 	];
 	if (view.status === "blocked") {
 		lines.push(`blocked: ${view.blockerSummary ? escapeHtml(view.blockerSummary) : MESSAGES.withheld}`);

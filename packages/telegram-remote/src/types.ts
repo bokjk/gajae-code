@@ -32,7 +32,7 @@ export interface GatewayPreset {
 }
 
 /** Bounded session status enum that may leave the PC into chat. */
-export type SessionStatus = "idle" | "working" | "blocked" | "offline";
+export type SessionStatus = "working" | "waiting_for_input" | "blocked" | "done" | "failed" | "cancelled" | "dead";
 
 /** Bounded turn-lifecycle enum that may leave the PC into chat. */
 export type TurnActivity = "none" | "queued" | "active" | "waiting_for_answer" | "terminal";

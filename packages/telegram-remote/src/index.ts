@@ -15,15 +15,20 @@ export {
 	deriveTurnActivity,
 	escapeHtml,
 	findSessionView,
+	formatRelativeTime,
+	isTerminalStatus,
+	isWithinRetention,
 	projectSessionRows,
 	projectSessionSummaries,
 	projectSessionSummary,
 	projectSessionView,
+	RETENTION_DEFAULT_MS,
 	readSessionId,
 	renderSessionsList,
 	renderSessionsListHtml,
 	renderSessionView,
 	renderSessionViewHtml,
+	shortSessionId,
 } from "./projection";
 export { type RunServiceOptions, runService } from "./service";
 export { type TelegramBotApiOptions, TelegramBotApiTransport } from "./telegram";

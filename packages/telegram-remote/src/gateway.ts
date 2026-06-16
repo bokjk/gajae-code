@@ -175,8 +175,8 @@ export class TelegramRemoteGateway {
 		if (!status.ok) return this.chat(MESSAGES.backendOffline);
 		const view = findSessionView(status, sessionId);
 		if (!view) return this.chat(MESSAGES.unknownSession);
-		// Fail closed: never record control for an offline session (it may have a different owner).
-		if (view.status === "offline") return this.chat(MESSAGES.backendOffline);
+		// Fail closed: never record control for a dead/non-live session (it may have a different owner).
+		if (view.status === "dead") return this.chat(MESSAGES.backendOffline);
 
 		const key = `${ctx.chatId}:${sessionId}`;
 		const now = this.now();
@@ -249,7 +249,7 @@ export class TelegramRemoteGateway {
 		if (!status.ok) return this.answerOnly(MESSAGES.backendOffline);
 		const view = findSessionView(status, record.sessionId);
 		if (!view) return this.answerOnly(MESSAGES.unknownSession);
-		if (view.status === "offline") return this.answerOnly(MESSAGES.backendOffline);
+		if (view.status === "dead") return this.answerOnly(MESSAGES.backendOffline);
 		const display = this.rich ? `<code>${escapeHtml(view.sessionId)}</code>` : view.sessionId;
 		const reply: ChatReply = {
 			kind: "chat",
@@ -267,7 +267,7 @@ export class TelegramRemoteGateway {
 		if (!status.ok) return this.answerOnly(MESSAGES.backendOffline);
 		const view = findSessionView(status, record.sessionId);
 		if (!view) return this.answerOnly(MESSAGES.unknownSession);
-		if (view.status === "offline") return this.answerOnly(MESSAGES.backendOffline);
+		if (view.status === "dead") return this.answerOnly(MESSAGES.backendOffline);
 		// Single-use: consume before the call so a replay cannot double-mutate.
 		this.tokens.markUsed(token);
 		const result = await this.executeStop(record.sessionId, status, view);
@@ -297,10 +297,10 @@ export class TelegramRemoteGateway {
 	// --- Rendering + keyboards ---
 
 	private viewReply(view: SessionView, rawSessionId: string, ctx: CallbackContext): ChatReply {
-		if (!this.rich) return this.chat(renderSessionView(view));
+		if (!this.rich) return this.chat(renderSessionView(view, this.now()));
 		return {
 			kind: "chat",
-			text: renderSessionViewHtml(view),
+			text: renderSessionViewHtml(view, this.now()),
 			parseMode: "HTML",
 			replyMarkup: this.observeKeyboard(rawSessionId, ctx),
 		};
