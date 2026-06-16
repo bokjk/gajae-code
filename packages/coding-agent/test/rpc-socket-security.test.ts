@@ -4,6 +4,7 @@ import * as net from "node:net";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import {
+	assertSafeClientSocket,
 	prepareRpcSocketPath,
 	RpcSocketSecurityError,
 	verifyRpcSocketAfterListen,
@@ -108,5 +109,61 @@ describe("rpc socket security", () => {
 		const badPath = path.join(dir, "ambiguous.sock");
 		await writeFile(badPath, "not socket");
 		await expect(verifyRpcSocketAfterListen(badPath)).rejects.toThrow(/not a socket after listen/);
+	});
+
+	test("client validator accepts a live private socket", async () => {
+		const socketPath = path.join(dir, "client-live.sock");
+		const server = net.createServer();
+		await new Promise<void>((resolve, reject) => {
+			server.once("error", reject);
+			server.listen(socketPath, resolve);
+		});
+		try {
+			await chmod(socketPath, 0o600);
+			await expect(assertSafeClientSocket(socketPath)).resolves.toBeUndefined();
+		} finally {
+			await new Promise<void>(resolve => server.close(() => resolve()));
+		}
+	});
+
+	test("client validator refuses wrong-owner paths via current uid seam", async () => {
+		// A real uid-mismatch socket cannot be created portably in-process without chown privileges.
+		// assertSafeClientSocket reads process.getuid at validation time, so overriding that seam
+		// exercises the same fail-closed owner-check path against this test-owned fixture.
+		const getuid = process.getuid;
+		if (typeof getuid !== "function") return;
+		Object.defineProperty(process, "getuid", { configurable: true, value: () => getuid.call(process) + 1 });
+		try {
+			await expect(assertSafeClientSocket(path.join(dir, "missing.sock"))).rejects.toThrow(/owned by uid/);
+		} finally {
+			Object.defineProperty(process, "getuid", { configurable: true, value: getuid });
+		}
+	});
+
+	test("client validator refuses symlink non-socket and group-writable socket without unlinking", async () => {
+		const regular = path.join(dir, "regular.sock");
+		await writeFile(regular, "not a socket");
+		await expect(assertSafeClientSocket(regular)).rejects.toThrow(/not a socket/);
+		expect(await lstat(regular)).toBeDefined();
+
+		const target = path.join(dir, "target.sock");
+		const link = path.join(dir, "link.sock");
+		await writeFile(target, "not a socket");
+		await symlink(target, link);
+		await expect(assertSafeClientSocket(link)).rejects.toThrow(/symlink/);
+
+		const socketPath = path.join(dir, "group-writable.sock");
+		const server = net.createServer();
+		await new Promise<void>((resolve, reject) => {
+			server.once("error", reject);
+			server.listen(socketPath, resolve);
+		});
+		try {
+			await chmod(socketPath, 0o660);
+			await expect(assertSafeClientSocket(socketPath)).rejects.toThrow(/group\/other permissions/);
+			expect((await lstat(socketPath)).isSocket()).toBe(true);
+		} finally {
+			await new Promise<void>(resolve => server.close(() => resolve()));
+		}
 	});
 });

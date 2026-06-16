@@ -27,6 +27,7 @@ function isControlState(value: unknown): value is RpcControlState {
 		value === "attached_idle" ||
 		value === "attached_turn_active" ||
 		value === "waiting_for_ui" ||
+		value === "control_pending_abort_and_prompt" ||
 		value === "reconnecting" ||
 		value === "stale"
 	);

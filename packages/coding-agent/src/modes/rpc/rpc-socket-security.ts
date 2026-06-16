@@ -58,6 +58,21 @@ export async function prepareRpcSocketPath(socketPath: string): Promise<void> {
 	await fs.unlink(socketPath);
 }
 
+export async function assertSafeClientSocket(socketPath: string): Promise<void> {
+	const parent = path.dirname(socketPath);
+	const parentStat = await fs.lstat(parent);
+	if (parentStat.isSymbolicLink()) throw new RpcSocketSecurityError(`RPC socket parent is a symlink: ${parent}`);
+	if (!parentStat.isDirectory()) throw new RpcSocketSecurityError(`RPC socket parent is not a directory: ${parent}`);
+	assertOwned(parentStat, parent);
+	assertPrivateMode(parentStat.mode, parent);
+
+	const socketStat = await fs.lstat(socketPath);
+	if (socketStat.isSymbolicLink()) throw new RpcSocketSecurityError(`RPC socket path is a symlink: ${socketPath}`);
+	assertOwned(socketStat, socketPath);
+	if (!socketStat.isSocket()) throw new RpcSocketSecurityError(`RPC socket path is not a socket: ${socketPath}`);
+	assertPrivateMode(socketStat.mode, socketPath);
+}
+
 export async function verifyRpcSocketAfterListen(socketPath: string): Promise<void> {
 	await fs.chmod(socketPath, 0o600);
 	const st = await fs.lstat(socketPath);

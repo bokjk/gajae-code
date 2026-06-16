@@ -88,6 +88,7 @@ export type RpcControlState =
 	| "attached_idle"
 	| "attached_turn_active"
 	| "waiting_for_ui"
+	| "control_pending_abort_and_prompt"
 	| "reconnecting"
 	| "stale";
 
@@ -135,6 +136,13 @@ export interface RpcBackendPort {
 	connect(): Promise<void>;
 	close(): Promise<void>;
 	getState(): Promise<RpcBackendState>;
+	prompt(message: string): Promise<void>;
+	steer(message: string): Promise<void>;
+	abort(): Promise<void>;
+	abortAndPrompt(message: string): Promise<void>;
+	onEvents?(listener: (event: { type: string; [key: string]: unknown }) => void): () => void;
+	onTransportError?(listener: (error: Error) => void): () => void;
+	onCommandIgnored?(listener: (error: Error) => void): () => void;
 }
 
 // --- Rich messaging contract (presentation layer only) ---
