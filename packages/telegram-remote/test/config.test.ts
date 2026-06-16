@@ -112,6 +112,14 @@ describe("loadConfigFromEnv", () => {
 		expect(config.coordinator.env.GJC_COORDINATOR_MCP_MUTATIONS).not.toContain("questions");
 	});
 
+	test("push subscription knobs have safe defaults", () => {
+		const config = loadConfigFromEnv(baseEnv());
+		expect(config.stateDir).toBeUndefined();
+		expect(config.followTtlMs).toBe(86_400_000);
+		expect(config.enablePush).toBe(false);
+		expect(config.subscriptionsMax).toBe(1000);
+	});
+
 	test("rich UI can be disabled and tuned via env", () => {
 		const config = loadConfigFromEnv(
 			baseEnv({
@@ -127,5 +135,28 @@ describe("loadConfigFromEnv", () => {
 		expect(config.policy.richCallbackMaxTokens).toBe(50);
 		expect(config.enableEditMessageText).toBe(true);
 		expect(config.registerBotCommands).toBe(false);
+	});
+
+	test("push subscription knobs can be tuned via env", () => {
+		const config = loadConfigFromEnv(
+			baseEnv({
+				GJC_TELEGRAM_REMOTE_STATE_DIR: "/tmp/telegram-remote-state",
+				GJC_TELEGRAM_REMOTE_FOLLOW_TTL_MS: "120000",
+				GJC_TELEGRAM_REMOTE_ENABLE_PUSH: "true",
+				GJC_TELEGRAM_REMOTE_SUBSCRIPTIONS_MAX: "25",
+			}),
+		);
+		expect(config.stateDir).toBe("/tmp/telegram-remote-state");
+		expect(config.followTtlMs).toBe(120_000);
+		expect(config.enablePush).toBe(true);
+		expect(config.subscriptionsMax).toBe(25);
+	});
+
+	test("rejects invalid state directories", () => {
+		for (const stateDir of ["relative/state", "/tmp/../state", "/tmp/state\0bad"]) {
+			expect(() => loadConfigFromEnv(baseEnv({ GJC_TELEGRAM_REMOTE_STATE_DIR: stateDir }))).toThrow(
+				/telegram_remote_invalid_state_dir/,
+			);
+		}
 	});
 });

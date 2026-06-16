@@ -6,12 +6,15 @@
 import type { McpStdioOptions } from "./coordinator-client";
 import type { GatewayPolicy } from "./gateway";
 import { assertValidPreset } from "./presets";
+import { resolveStateDir } from "./subscriptions";
 import type { GatewayPreset } from "./types";
 
 const DEFAULT_TASK_MAX_LEN = 2000;
 const DEFAULT_COORDINATOR_COMMAND = "gjc";
 const DEFAULT_COORDINATOR_ARGS = ["mcp-serve", "coordinator"];
 const WORKDIR_ROOT_SEPARATOR = ":";
+const DEFAULT_FOLLOW_TTL_MS = 86_400_000;
+const DEFAULT_SUBSCRIPTIONS_MAX = 1000;
 
 /** Fully resolved configuration for {@link runService}. */
 export interface ServiceConfig {
@@ -22,6 +25,11 @@ export interface ServiceConfig {
 	enableEditMessageText: boolean;
 	/** Register the Bot command menu at startup (transport). Default true. */
 	registerBotCommands: boolean;
+	stateDir?: string;
+	followTtlMs: number;
+	/** Enable proactive Follow push plumbing. Default false. */
+	enablePush: boolean;
+	subscriptionsMax: number;
 	policy: GatewayPolicy;
 	coordinator: McpStdioOptions;
 }
@@ -170,6 +178,15 @@ export function loadConfigFromEnv(env: Env): ServiceConfig {
 	const enableStop = isTruthy(env.GJC_TELEGRAM_REMOTE_ENABLE_STOP);
 
 	const pollTimeoutSec = parsePositiveInt(env.GJC_TELEGRAM_REMOTE_POLL_TIMEOUT_SEC, 30);
+	const stateDirValue = env.GJC_TELEGRAM_REMOTE_STATE_DIR?.trim();
+	let stateDir: string | undefined;
+	if (stateDirValue) {
+		try {
+			stateDir = resolveStateDir(stateDirValue);
+		} catch {
+			throw new Error("telegram_remote_invalid_state_dir");
+		}
+	}
 
 	return {
 		botToken,
@@ -177,6 +194,10 @@ export function loadConfigFromEnv(env: Env): ServiceConfig {
 		pollTimeoutSec,
 		enableEditMessageText: isTruthyDefault(env.GJC_TELEGRAM_REMOTE_ENABLE_EDIT_MESSAGE_TEXT, false),
 		registerBotCommands: isTruthyDefault(env.GJC_TELEGRAM_REMOTE_REGISTER_COMMANDS, true),
+		stateDir,
+		followTtlMs: parsePositiveInt(env.GJC_TELEGRAM_REMOTE_FOLLOW_TTL_MS, DEFAULT_FOLLOW_TTL_MS),
+		enablePush: isTruthyDefault(env.GJC_TELEGRAM_REMOTE_ENABLE_PUSH, false),
+		subscriptionsMax: parsePositiveInt(env.GJC_TELEGRAM_REMOTE_SUBSCRIPTIONS_MAX, DEFAULT_SUBSCRIPTIONS_MAX),
 		policy: {
 			allowedUserIds,
 			allowedChatIds,

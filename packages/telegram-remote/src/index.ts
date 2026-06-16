@@ -31,6 +31,14 @@ export {
 	shortSessionId,
 } from "./projection";
 export { type RunServiceOptions, runService } from "./service";
+export {
+	resolveStateDir,
+	STATE_FILE_NAME,
+	type Subscription,
+	SubscriptionStore,
+	type SubscriptionStoreOptions,
+	type SubscriptionStoreState,
+} from "./subscriptions";
 export { type TelegramBotApiOptions, TelegramBotApiTransport } from "./telegram";
 export {
 	CALLBACK_PREFIX,

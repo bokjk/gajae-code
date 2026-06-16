@@ -11,6 +11,9 @@ function serviceConfig(overrides: Partial<ServiceConfig["policy"]> = {}): Servic
 		pollTimeoutSec: 1,
 		enableEditMessageText: false,
 		registerBotCommands: false,
+		followTtlMs: 86_400_000,
+		enablePush: false,
+		subscriptionsMax: 1000,
 		policy: {
 			allowedUserIds: new Set(["100"]),
 			allowedChatIds: new Set(),
