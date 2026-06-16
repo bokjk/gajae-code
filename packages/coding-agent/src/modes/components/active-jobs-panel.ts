@@ -96,6 +96,7 @@ export class ActiveJobsPanelComponent extends Container {
 
 	/** Update the data snapshot, then reconcile visibility/selection/focus/timers. */
 	setSnapshot(snapshot: JobsSnapshot): void {
+		if (this.#disposed) return;
 		this.#snapshot = snapshot;
 		this.#reconcileAfterChange();
 		this.#requestRender();
@@ -329,6 +330,7 @@ export class ActiveJobsPanelComponent extends Container {
 	}
 
 	#syncTimers(): void {
+		if (this.#disposed) return; // never re-arm timers after teardown
 		const visible = this.isVisible();
 		// Minute/TTL-boundary label refresh while the panel is shown.
 		if (visible && !this.#labelTimer) this.#scheduleLabelRefresh();

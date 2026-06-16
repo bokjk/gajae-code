@@ -236,6 +236,14 @@ describe("ActiveJobsPanelComponent", () => {
 		expect(panel.render(80)).toEqual([]);
 		panel.dispose();
 	});
+	test("setSnapshot after dispose is a no-op and re-arms no timers", () => {
+		const harness = makePanel(snap({ monitors: [mon({ id: "m", status: "running" })] }));
+		harness.panel.dispose();
+		const before = harness.renders;
+		harness.panel.setSnapshot(snap({ crons: [cron({ id: "x" })] }));
+		expect(harness.renders).toBe(before); // disposed panel ignores updates (no reconcile/render/timer)
+	});
+
 	test("auto-hide returns focus to the editor when all jobs vanish while expanded", () => {
 		const { panel, focus } = makePanel(snap({ crons: [cron({ id: "pr" })] }));
 		panel.onExpandUp();
