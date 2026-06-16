@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { AsyncJobOutputSlice, AsyncJobOutputTailOptions } from "../src/async";
 import { ActiveJobsPanelComponent, type ActiveJobsPanelController } from "../src/modes/components/active-jobs-panel";
 import { COMPLETED_MONITOR_VISIBLE_MS } from "../src/modes/components/active-jobs-panel-model";
+import type { JobRef } from "../src/modes/components/jobs-format";
 import type { CronJobView, JobsSnapshot, MonitorJobView } from "../src/modes/jobs-observer";
 
 const NOW = 5_000_000;
@@ -52,10 +53,28 @@ function makeController(snapshot: JobsSnapshot, tail = "tail line one\ntail line
 function makePanel(snapshot: JobsSnapshot, tail?: string) {
 	const controller = makeController(snapshot, tail);
 	let renders = 0;
-	const panel = new ActiveJobsPanelComponent(controller, { requestRender: () => renders++, now: () => NOW });
+	const focus = { self: 0, editor: 0 };
+	const managed: JobRef[] = [];
+	const panel = new ActiveJobsPanelComponent(controller, {
+		requestRender: () => {
+			renders++;
+		},
+		now: () => NOW,
+		focusSelf: () => {
+			focus.self++;
+		},
+		focusEditor: () => {
+			focus.editor++;
+		},
+		openManageJob: ref => {
+			managed.push(ref);
+		},
+	});
 	panel.setSnapshot(snapshot);
 	return {
 		panel,
+		focus,
+		managed,
 		get renders() {
 			return renders;
 		},
@@ -90,17 +109,20 @@ describe("ActiveJobsPanelComponent", () => {
 		panel.dispose();
 	});
 
-	test("expands to show live monitor tail, collapses from the top", () => {
-		const { panel } = makePanel(snap({ monitors: [mon({ id: "m", label: "tail x" })] }));
+	test("expands (taking focus) and shows the live monitor tail; collapse returns focus", () => {
+		const { panel, focus } = makePanel(snap({ monitors: [mon({ id: "m", label: "tail x" })] }));
 		expect(panel.isExpanded()).toBe(false);
 		panel.onExpandUp();
 		expect(panel.isExpanded()).toBe(true);
+		expect(focus.self).toBe(1); // panel grabbed focus on expand
+		expect(panel.selectedRef()).toEqual({ kind: "monitor", id: "m" });
 		const expanded = panel.render(80).join("\n");
-		expect(expanded).toContain("expanded");
+		expect(expanded).toContain("enter manage");
+		expect(expanded).toContain("› monitor · tail x");
 		expect(expanded).toContain("tail line two");
-		// from the top, ctrl+down collapses
-		panel.onCollapseDown();
+		panel.collapse();
 		expect(panel.isExpanded()).toBe(false);
+		expect(focus.editor).toBe(1); // focus handed back to the editor
 		panel.dispose();
 	});
 
@@ -129,28 +151,58 @@ describe("ActiveJobsPanelComponent", () => {
 		expect(panel.isExpanded()).toBe(false);
 		panel.dispose();
 	});
-	test("ctrl+down scrolls the expanded list to the last job, then collapses at the bottom", () => {
+	test("arrow-down moves the selection through every job to the last; collapse returns to editor", () => {
 		const monitors = Array.from({ length: 15 }, (_, i) =>
 			mon({ id: `m${i}`, label: `mon${i}`, status: "running", startTime: NOW - i }),
 		);
 		const crons = Array.from({ length: 50 }, (_, i) =>
 			cron({ id: `c${i}`, prompt: `promptnum${i}`, createdAt: NOW - i }),
 		);
-		const { panel } = makePanel(snap({ monitors, crons }));
+		const { panel, focus } = makePanel(snap({ monitors, crons }));
 		panel.setMaxRows(8); // small window forces real scrolling
 		panel.onExpandUp();
 		expect(panel.isExpanded()).toBe(true);
+		expect(panel.selectedRef()).toEqual({ kind: "monitor", id: "m0" }); // first job selected
 
 		const seen: string[] = [];
 		let guard = 0;
-		while (panel.isExpanded() && guard++ < 1000) {
+		while (panel.selectedRef()?.id !== "c49" && guard++ < 500) {
 			seen.push(...panel.render(120));
-			panel.onCollapseDown();
+			panel.onCollapseDown(); // arrow-down moves the selection
 		}
-		// last cron (oldest createdAt -> c49) is reachable before the panel collapses
+		seen.push(...panel.render(120));
+		// selection reached the last job and its row is rendered/scrolled into view
+		expect(panel.selectedRef()).toEqual({ kind: "cron", id: "c49" });
 		expect(seen.some(line => line.includes("promptnum49"))).toBe(true);
-		// and the panel does eventually collapse at the bottom
+
+		panel.collapse();
 		expect(panel.isExpanded()).toBe(false);
+		expect(focus.editor).toBeGreaterThan(0);
+		panel.dispose();
+	});
+
+	test("Enter on the selected job opens the manage overlay and collapses the panel", () => {
+		const { panel, managed } = makePanel(
+			snap({
+				monitors: [mon({ id: "build", label: "npm run build", status: "running" })],
+				crons: [cron({ id: "pr" })],
+			}),
+		);
+		panel.onExpandUp();
+		expect(panel.selectedRef()).toEqual({ kind: "monitor", id: "build" });
+		panel.activateSelected();
+		expect(managed).toEqual([{ kind: "monitor", id: "build" }]);
+		expect(panel.isExpanded()).toBe(false);
+		panel.dispose();
+	});
+
+	test("handleInput routes Escape to collapse while focused", () => {
+		const { panel, focus } = makePanel(snap({ crons: [cron({ id: "pr" })] }));
+		panel.onExpandUp();
+		expect(panel.isExpanded()).toBe(true);
+		panel.handleInput("\x1b"); // Escape
+		expect(panel.isExpanded()).toBe(false);
+		expect(focus.editor).toBeGreaterThan(0);
 		panel.dispose();
 	});
 

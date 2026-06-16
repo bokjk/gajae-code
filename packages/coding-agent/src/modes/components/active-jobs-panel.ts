@@ -1,20 +1,28 @@
 /**
- * Passive, read-only inline panel that visualizes active monitor/cron jobs
- * directly below the input. It auto-surfaces whenever the filtered snapshot has
- * any visible job and hides otherwise; it never offers destructive actions
- * (those stay in the alt+j / `/monitors` manage overlay) and never acknowledges
- * failures.
+ * Inline panel that visualizes active monitor/cron jobs directly below the
+ * input. It auto-surfaces whenever the filtered snapshot has any visible job and
+ * hides otherwise.
  *
- * Rendering and visibility derive entirely from the pure model in
- * `active-jobs-panel-model`. The component owns only side effects: a
- * minute-boundary label refresh while visible and a bounded live-tail poll while
- * expanded (visible monitor rows only).
+ * Two modes:
+ * - Collapsed (default, passive): a compact glance list; never steals focus and
+ *   never offers destructive actions.
+ * - Expanded (ctrl+up): the panel takes focus and becomes a selectable list —
+ *   arrows move the selection, Enter opens the existing alt+j "Manage Jobs"
+ *   overlay focused on the selected job (where cancel/delete live behind a
+ *   confirm), and Esc collapses + returns focus to the editor. The panel itself
+ *   still never cancels/deletes or acknowledges failures.
+ *
+ * Rendering and visibility derive from the pure model in
+ * `active-jobs-panel-model`. The component owns side effects only: focus
+ * handoff, a minute/TTL-boundary label refresh, and a bounded live-tail poll
+ * while expanded.
  */
-import { Container } from "@gajae-code/tui";
+import { Container, matchesKey } from "@gajae-code/tui";
 import type { AsyncJobOutputSlice, AsyncJobOutputTailOptions } from "../../async";
 import { EMPTY_JOBS_SNAPSHOT, type JobsSnapshot } from "../jobs-observer";
 import {
 	buildCollapsedRows,
+	buildExpandedFlat,
 	buildExpandedWindow,
 	COLLAPSED_JOB_ROW_CAP,
 	COMPLETED_MONITOR_VISIBLE_MS,
@@ -22,10 +30,12 @@ import {
 	FAILED_MONITOR_VISIBLE_MS,
 	filterVisibleJobs,
 	hasVisibleJobs,
+	listVisibleJobRefs,
 	TAIL_MAX_BYTES,
 	TAIL_MAX_LINES_PER_MONITOR,
 	TAIL_POLL_MS,
 } from "./active-jobs-panel-model";
+import type { JobRef } from "./jobs-format";
 
 /** Read-only data access the panel needs (a `JobsObserver` subset). */
 export interface ActiveJobsPanelController {
@@ -37,6 +47,12 @@ export interface ActiveJobsPanelCallbacks {
 	requestRender(): void;
 	/** Injectable clock for deterministic tests; defaults to Date.now. */
 	now?(): number;
+	/** Give the panel input focus (so arrows/Enter/Esc route to it) when it expands. */
+	focusSelf?(): void;
+	/** Return focus to the editor when the panel collapses. */
+	focusEditor?(): void;
+	/** Open the alt+j Manage Jobs overlay focused on the given job (cancel/delete + confirm). */
+	openManageJob?(ref: JobRef): void;
 }
 
 /** Default max rows the expanded panel may occupy (interactive-mode tightens this from terminal height). */
@@ -44,15 +60,22 @@ const DEFAULT_MAX_ROWS = 10;
 const MS_PER_MINUTE = 60_000;
 
 export class ActiveJobsPanelComponent extends Container {
+	/** Set by the TUI when focus changes (Focusable). */
+	focused = false;
+
 	readonly #controller: ActiveJobsPanelController;
 	readonly #requestRender: () => void;
 	readonly #now: () => number;
+	readonly #focusSelf: (() => void) | undefined;
+	readonly #focusEditor: (() => void) | undefined;
+	readonly #openManageJob: ((ref: JobRef) => void) | undefined;
 
 	#snapshot: JobsSnapshot = EMPTY_JOBS_SNAPSHOT;
 	#expanded = false;
 	#scrollOffset = 0;
 	#maxRows = DEFAULT_MAX_ROWS;
 	#disposed = false;
+	#selectedRef: JobRef | undefined;
 	/** Cached last-N tail lines per monitor id (only for visible expanded rows). */
 	readonly #tailLines = new Map<string, string[]>();
 	#visibleMonitorIds: string[] = [];
@@ -64,6 +87,9 @@ export class ActiveJobsPanelComponent extends Container {
 		this.#controller = controller;
 		this.#requestRender = callbacks.requestRender;
 		this.#now = callbacks.now ?? Date.now;
+		this.#focusSelf = callbacks.focusSelf;
+		this.#focusEditor = callbacks.focusEditor;
+		this.#openManageJob = callbacks.openManageJob;
 		this.#snapshot = controller.getSnapshot();
 		this.#syncTimers();
 	}
@@ -72,10 +98,9 @@ export class ActiveJobsPanelComponent extends Container {
 	setSnapshot(snapshot: JobsSnapshot): void {
 		this.#snapshot = snapshot;
 		if (!this.isVisible()) {
-			this.#expanded = false;
-			this.#scrollOffset = 0;
-			this.#tailLines.clear();
-			this.#visibleMonitorIds = [];
+			this.#collapseState();
+		} else if (this.#expanded) {
+			this.#reconcileSelection();
 		}
 		this.#syncTimers();
 		this.#requestRender();
@@ -94,39 +119,113 @@ export class ActiveJobsPanelComponent extends Container {
 		return this.#expanded;
 	}
 
-	/** ctrl+up: expand from collapsed, else scroll up one row. */
+	/** The currently selected job while expanded (for tests/inspection). */
+	selectedRef(): JobRef | undefined {
+		return this.#expanded ? this.#selectedRef : undefined;
+	}
+
+	/** ctrl+up / up: expand from collapsed (and take focus), else move selection up. */
 	onExpandUp(): void {
 		if (this.#disposed || !this.isVisible()) return;
 		if (!this.#expanded) {
 			this.#expanded = true;
 			this.#scrollOffset = 0;
+			this.#reconcileSelection();
 			this.#pollVisibleTails();
+			this.#ensureSelectedVisible(this.#now());
+			this.#focusSelf?.();
 		} else {
-			this.#scrollBy(-1);
+			this.#move(-1);
 		}
 		this.#syncTimers();
 		this.#requestRender();
 	}
 
-	/** ctrl+down: scroll the expanded list down; collapse only once at the bottom. */
+	/** ctrl+down / down: move selection down while expanded (no-op when collapsed). */
 	onCollapseDown(): void {
 		if (this.#disposed || !this.isVisible() || !this.#expanded) return;
-		const budget = this.#expandedHeightBudget();
-		const win = buildExpandedWindow(this.#snapshot, this.#now(), this.#scrollOffset, budget, this.#tailRecord());
-		this.#scrollOffset = win.scrollOffset;
-		if (win.canScrollDown) {
-			this.#scrollBy(1);
-		} else {
-			this.#expanded = false;
-		}
+		this.#move(1);
 		this.#syncTimers();
 		this.#requestRender();
 	}
 
-	#scrollBy(delta: number): void {
+	/** Open the Manage Jobs overlay on the selected job, then collapse the panel. */
+	activateSelected(): void {
+		if (this.#disposed || !this.#expanded || !this.#selectedRef) return;
+		const ref = this.#selectedRef;
+		this.#collapseState();
+		this.#syncTimers();
+		this.#openManageJob?.(ref);
+		this.#requestRender();
+	}
+
+	/** Collapse and hand focus back to the editor. */
+	collapse(): void {
+		if (!this.#expanded) return;
+		this.#collapseState();
+		this.#syncTimers();
+		this.#focusEditor?.();
+		this.#requestRender();
+	}
+
+	/** Focusable input handler: active only while the panel is expanded/focused. */
+	handleInput(data: string): void {
+		if (!this.#expanded) return;
+		if (matchesKey(data, "up") || matchesKey(data, "ctrl+up")) {
+			this.onExpandUp();
+		} else if (matchesKey(data, "down") || matchesKey(data, "ctrl+down")) {
+			this.onCollapseDown();
+		} else if (matchesKey(data, "enter")) {
+			this.activateSelected();
+		} else if (matchesKey(data, "escape")) {
+			this.collapse();
+		}
+	}
+
+	#collapseState(): void {
+		this.#expanded = false;
+		this.#scrollOffset = 0;
+		this.#selectedRef = undefined;
+		this.#tailLines.clear();
+		this.#visibleMonitorIds = [];
+	}
+
+	#reconcileSelection(): void {
+		const refs = listVisibleJobRefs(this.#snapshot, this.#now());
+		if (refs.length === 0) {
+			this.#selectedRef = undefined;
+			return;
+		}
+		const sel = this.#selectedRef;
+		if (!sel || !refs.some(r => r.kind === sel.kind && r.id === sel.id)) {
+			this.#selectedRef = refs[0];
+		}
+	}
+
+	#move(delta: number): void {
+		const now = this.#now();
+		const refs = listVisibleJobRefs(this.#snapshot, now);
+		if (refs.length === 0) return;
+		const sel = this.#selectedRef;
+		let idx = sel ? refs.findIndex(r => r.kind === sel.kind && r.id === sel.id) : 0;
+		if (idx < 0) idx = 0;
+		idx = Math.min(refs.length - 1, Math.max(0, idx + delta));
+		this.#selectedRef = refs[idx];
+		this.#ensureSelectedVisible(now);
+	}
+
+	#ensureSelectedVisible(now: number): void {
+		const sel = this.#selectedRef;
+		if (!sel) return;
+		const flat = buildExpandedFlat(this.#snapshot, now, this.#tailRecord());
+		const idx = flat.findIndex(
+			r => (r.kind === "monitor" || r.kind === "cron") && r.kind === sel.kind && r.id === sel.id,
+		);
+		if (idx < 0) return;
 		const budget = this.#expandedHeightBudget();
-		const win = buildExpandedWindow(this.#snapshot, this.#now(), this.#scrollOffset, budget, this.#tailRecord());
-		this.#scrollOffset = clampScrollOffset(this.#scrollOffset + delta, win.totalRows, budget);
+		if (idx < this.#scrollOffset) this.#scrollOffset = idx;
+		else if (idx >= this.#scrollOffset + budget) this.#scrollOffset = idx - budget + 1;
+		this.#scrollOffset = clampScrollOffset(this.#scrollOffset, flat.length, budget);
 	}
 
 	#expandedHeightBudget(): number {
@@ -173,11 +272,17 @@ export class ActiveJobsPanelComponent extends Container {
 		const shownEnd = win.scrollOffset + win.visibleRows.length;
 		const indicators = `${win.canScrollUp ? "↑" : " "}${win.canScrollDown ? "↓" : " "}`;
 		const lines: string[] = [
-			`Active jobs — expanded (${shownStart}-${shownEnd} of ${win.totalRows}) ${indicators} ctrl+↓ collapse`,
+			`Active jobs (${shownStart}-${shownEnd} of ${win.totalRows}) ${indicators} ↑↓ select · enter manage · esc close`,
 		];
+		const sel = this.#selectedRef;
 		for (const row of win.visibleRows) {
-			// Nest live-tail rows under their monitor with a deeper indent + marker.
-			lines.push(row.kind === "monitor-tail" ? `    ↳ ${row.text}` : `  ${row.text}`);
+			if (row.kind === "monitor-tail") {
+				// Nest live-tail rows under their monitor with a deeper indent + marker.
+				lines.push(`    ↳ ${row.text}`);
+				continue;
+			}
+			const isSelected = sel !== undefined && row.kind === sel.kind && row.id === sel.id;
+			lines.push(`${isSelected ? "› " : "  "}${row.text}`);
 		}
 		return lines;
 	}
@@ -206,7 +311,7 @@ export class ActiveJobsPanelComponent extends Container {
 
 	#syncTimers(): void {
 		const visible = this.isVisible();
-		// Minute-boundary label refresh while the panel is shown.
+		// Minute/TTL-boundary label refresh while the panel is shown.
 		if (visible && !this.#labelTimer) this.#scheduleLabelRefresh();
 		if (!visible && this.#labelTimer) {
 			clearTimeout(this.#labelTimer);

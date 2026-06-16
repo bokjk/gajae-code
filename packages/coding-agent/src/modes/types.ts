@@ -26,6 +26,7 @@ import type { EvalExecutionComponent } from "./components/eval-execution";
 import type { HookEditorComponent } from "./components/hook-editor";
 import type { HookInputComponent } from "./components/hook-input";
 import type { HookSelectorComponent } from "./components/hook-selector";
+import type { JobRef } from "./components/jobs-format";
 import type { StatusLineComponent } from "./components/status-line";
 import type { ToolExecutionHandle } from "./components/tool-execution";
 import type { OAuthManualInputManager } from "./oauth-manual-input";
@@ -255,7 +256,7 @@ export interface InteractiveModeContext {
 	showHookConfirm(title: string, message: string): Promise<boolean>;
 	showDebugSelector(): void;
 	showSessionObserver(): void;
-	showJobsOverlay(): void;
+	showJobsOverlay(initialRef?: JobRef): void;
 	resetObserverRegistry(): void;
 
 	// Input handling

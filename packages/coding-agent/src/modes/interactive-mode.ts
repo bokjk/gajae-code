@@ -84,6 +84,7 @@ import type { EvalExecutionComponent } from "./components/eval-execution";
 import type { HookEditorComponent } from "./components/hook-editor";
 import type { HookInputComponent } from "./components/hook-input";
 import type { HookSelectorComponent } from "./components/hook-selector";
+import type { JobRef } from "./components/jobs-format";
 import { StatusLineComponent } from "./components/status-line";
 import type { ToolExecutionHandle } from "./components/tool-execution";
 import { WelcomeComponent, type LspServerInfo as WelcomeLspServerInfo } from "./components/welcome";
@@ -549,6 +550,9 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.statusLine.setJobs(jobsObserver.getSnapshot());
 			const activeJobsPanel = new ActiveJobsPanelComponent(jobsObserver, {
 				requestRender: () => this.ui.requestRender(),
+				focusSelf: () => this.ui.setFocus(activeJobsPanel),
+				focusEditor: () => this.ui.setFocus(this.editor),
+				openManageJob: ref => this.showJobsOverlay(ref),
 			});
 			activeJobsPanel.setMaxRows(this.#computePanelMaxRows());
 			activeJobsPanel.setSnapshot(jobsObserver.getSnapshot());
@@ -2405,12 +2409,12 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#selectorController.showSessionObserver(this.#observerRegistry);
 	}
 
-	showJobsOverlay(): void {
+	showJobsOverlay(initialRef?: JobRef): void {
 		if (!this.#jobsObserver) {
 			this.showStatus("Background jobs are unavailable in this session");
 			return;
 		}
-		this.#selectorController.showJobsOverlay(this.#jobsObserver);
+		this.#selectorController.showJobsOverlay(this.#jobsObserver, initialRef);
 	}
 
 	resetObserverRegistry(): void {

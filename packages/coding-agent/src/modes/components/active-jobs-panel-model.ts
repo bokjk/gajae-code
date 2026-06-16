@@ -13,6 +13,7 @@ import {
 	compareMonitorsNewestFirst,
 	formatRelative,
 	formatRuntime,
+	type JobRef,
 	previewText,
 } from "./jobs-format";
 
@@ -156,23 +157,7 @@ export function buildExpandedWindow(
 	tailByMonitorId: Record<string, string[]> = {},
 	width?: number,
 ): ExpandedWindow {
-	const { monitors, crons } = filterVisibleJobs(snapshot, nowMs);
-	const flat: ExpandedRow[] = [];
-	for (const m of monitors) {
-		flat.push({ kind: "monitor", id: m.id, text: monitorRowText(m, nowMs, width) });
-		const lines = (tailByMonitorId[m.id] ?? []).slice(-TAIL_MAX_LINES_PER_MONITOR);
-		for (const line of lines) {
-			// Tail content only; the component indents tail rows under their monitor.
-			flat.push({
-				kind: "monitor-tail",
-				id: m.id,
-				text: width !== undefined ? previewText(line, width) : line,
-			});
-		}
-	}
-	for (const c of crons) {
-		flat.push({ kind: "cron", id: c.id, text: cronRowText(c, nowMs, width) });
-	}
+	const flat = buildExpandedFlat(snapshot, nowMs, tailByMonitorId, width);
 
 	const totalRows = flat.length;
 	const budget = Math.max(0, Math.floor(heightBudget));
@@ -192,4 +177,38 @@ export function buildExpandedWindow(
 		visibleMonitorTailIds,
 		scrollOffset: offset,
 	};
+}
+/**
+ * Flatten visible jobs into the expanded row model used for windowing and
+ * selection: each monitor header followed by its tail lines, then each cron.
+ */
+export function buildExpandedFlat(
+	snapshot: JobsSnapshot,
+	nowMs: number,
+	tailByMonitorId: Record<string, string[]> = {},
+	width?: number,
+): ExpandedRow[] {
+	const { monitors, crons } = filterVisibleJobs(snapshot, nowMs);
+	const flat: ExpandedRow[] = [];
+	for (const m of monitors) {
+		flat.push({ kind: "monitor", id: m.id, text: monitorRowText(m, nowMs, width) });
+		const lines = (tailByMonitorId[m.id] ?? []).slice(-TAIL_MAX_LINES_PER_MONITOR);
+		for (const line of lines) {
+			// Tail content only; the component indents tail rows under their monitor.
+			flat.push({ kind: "monitor-tail", id: m.id, text: width !== undefined ? previewText(line, width) : line });
+		}
+	}
+	for (const c of crons) {
+		flat.push({ kind: "cron", id: c.id, text: cronRowText(c, nowMs, width) });
+	}
+	return flat;
+}
+
+/** Visible jobs as selectable refs: monitors (newest-first) then crons (newest-first). */
+export function listVisibleJobRefs(snapshot: JobsSnapshot, nowMs: number): JobRef[] {
+	const { monitors, crons } = filterVisibleJobs(snapshot, nowMs);
+	return [
+		...monitors.map(m => ({ kind: "monitor" as const, id: m.id })),
+		...crons.map(c => ({ kind: "cron" as const, id: c.id })),
+	];
 }

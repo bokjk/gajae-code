@@ -52,6 +52,7 @@ import { AssistantMessageComponent } from "../components/assistant-message";
 import { CustomProviderWizardComponent, type CustomProviderWizardSubmit } from "../components/custom-provider-wizard";
 import { ExtensionDashboard } from "../components/extensions";
 import { HistorySearchComponent } from "../components/history-search";
+import type { JobRef } from "../components/jobs-format";
 import { JobsOverlayComponent } from "../components/jobs-overlay";
 import { ModelSelectorComponent } from "../components/model-selector";
 import { OAuthSelectorComponent } from "../components/oauth-selector";
@@ -1292,7 +1293,7 @@ export class SelectorController {
 	 * confirm. Built from nested SelectLists (list -> detail -> confirm) so focus
 	 * stays on the active SelectList.
 	 */
-	showJobsOverlay(observer: JobsObserver): void {
+	showJobsOverlay(observer: JobsObserver, initialRef?: JobRef): void {
 		let overlay: JobsOverlayComponent | undefined;
 		const close = () => {
 			this.ctx.editorContainer.clear();
@@ -1300,13 +1301,17 @@ export class SelectorController {
 			this.ctx.ui.setFocus(this.ctx.editor);
 			this.ctx.ui.requestRender();
 		};
-		overlay = new JobsOverlayComponent(observer, {
-			close,
-			requestRender: () => {
-				if (overlay) this.ctx.ui.setFocus(overlay.getFocus());
-				this.ctx.ui.requestRender();
+		overlay = new JobsOverlayComponent(
+			observer,
+			{
+				close,
+				requestRender: () => {
+					if (overlay) this.ctx.ui.setFocus(overlay.getFocus());
+					this.ctx.ui.requestRender();
+				},
 			},
-		});
+			initialRef,
+		);
 		this.ctx.editorContainer.clear();
 		this.ctx.editorContainer.addChild(overlay);
 		this.ctx.ui.setFocus(overlay.getFocus());

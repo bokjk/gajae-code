@@ -58,12 +58,15 @@ export class JobsOverlayComponent extends Container {
 	#action: JobsOverlayAction | undefined;
 	#selectList: SelectList | undefined;
 
-	constructor(controller: JobsOverlayController, callbacks: JobsOverlayCallbacks) {
+	constructor(controller: JobsOverlayController, callbacks: JobsOverlayCallbacks, initialRef?: JobRef) {
 		super();
 		this.#controller = controller;
 		this.#callbacks = callbacks;
 		this.#controller.acknowledgeFailures();
-		this.#renderList();
+		// When opened from the panel for a specific job, jump straight to its
+		// detail view (cancel/delete + confirm); otherwise start at the list.
+		if (initialRef) this.#renderDetail(initialRef);
+		else this.#renderList();
 	}
 
 	getFocus(): SelectList {
