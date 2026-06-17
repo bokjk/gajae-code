@@ -388,6 +388,8 @@ export interface AgentSessionConfig {
 	/** Rebuild the SSH tool from current capability discovery results. */
 	reloadSshTool?: () => Promise<AgentTool | null>;
 	requestedToolNames?: ReadonlySet<string>;
+	/** Optional per-session allowlist for tools exposed through search_tool_bm25. */
+	discoverableToolAllowedNames?: readonly string[];
 	/**
 	 * Optional accessor for live MCP server instructions. Read by the session's
 	 * `rebuildSystemPrompt`-skip optimization to detect server-side instruction
@@ -1016,6 +1018,7 @@ export class AgentSession {
 	// Generic tool discovery (covers built-in + MCP + extension when tools.discoveryMode === "all")
 	#discoverableToolSearchIndex: DiscoverableToolSearchIndex | null = null;
 	#selectedDiscoveredToolNames = new Set<string>();
+	#discoverableToolAllowedNames: ReadonlySet<string> | undefined;
 	#rpcHostToolNames = new Set<string>();
 	#gjcSubskillToolNames = new Set<string>();
 	#gjcSubskillToolSignature: string | undefined;
@@ -1224,6 +1227,9 @@ export class AgentSession {
 		this.#reloadSshTool = config.reloadSshTool;
 		this.#baseSystemPrompt = this.agent.state.systemPrompt;
 		this.#mcpDiscoveryEnabled = config.mcpDiscoveryEnabled ?? false;
+		this.#discoverableToolAllowedNames = config.discoverableToolAllowedNames
+			? new Set(config.discoverableToolAllowedNames.map(name => name.toLowerCase()))
+			: undefined;
 		this.#setDiscoverableMCPTools(this.#collectDiscoverableMCPToolsFromRegistry());
 		this.#selectedMCPToolNames = new Set(config.initialSelectedMCPToolNames ?? []);
 		this.#defaultSelectedMCPServerNames = new Set(config.defaultSelectedMCPServerNames ?? []);
@@ -3553,6 +3559,7 @@ export class AgentSession {
 		for (const tool of this.#toolRegistry.values()) {
 			if (tool.loadMode !== "discoverable") continue;
 			if (activeNames.has(tool.name)) continue;
+			if (this.#discoverableToolAllowedNames && !this.#discoverableToolAllowedNames.has(tool.name)) continue;
 			const collected = collectDiscoverableTools([tool], { source: "builtin" });
 			result.push(...collected);
 		}
@@ -3599,6 +3606,7 @@ export class AgentSession {
 			const currentActiveNames = new Set(this.getActiveToolNames());
 			const newlyAdded: string[] = [];
 			for (const name of nonMcpNames) {
+				if (this.#discoverableToolAllowedNames && !this.#discoverableToolAllowedNames.has(name)) continue;
 				if (this.#toolRegistry.has(name) && !currentActiveNames.has(name)) {
 					newlyAdded.push(name);
 					this.#selectedDiscoveredToolNames.add(name);

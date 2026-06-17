@@ -33,6 +33,7 @@ import { AskTool } from "./ask";
 import { AstEditTool } from "./ast-edit";
 import { AstGrepTool } from "./ast-grep";
 import { BashTool } from "./bash";
+import type { BashRestrictionProfile } from "./bash-allowed-prefixes";
 import { BrowserTool } from "./browser";
 import { CalculatorTool } from "./calculator";
 import { type CheckpointState, CheckpointTool, RewindTool } from "./checkpoint";
@@ -173,8 +174,12 @@ export interface ToolSession {
 	getToolByName?: (name: string) => AgentTool | undefined;
 	/** Agent registry for IRC routing across live sessions. */
 	agentRegistry?: AgentRegistry;
-	/** Optional restricted bash command prefixes for read-only role agents. */
+	/** Optional restricted bash command prefixes for read-only role agents and constrained modes. */
 	bashAllowedPrefixes?: string[];
+	/** Restriction policy for sessions that deliberately expose a narrow bash surface. */
+	bashRestrictionProfile?: BashRestrictionProfile;
+	/** Optional per-session allowlist for tools exposed through search_tool_bm25. */
+	discoverableToolAllowedNames?: readonly string[];
 	/** Get artifacts directory for artifact:// URLs */
 	getArtifactsDir?: () => string | null;
 	/** Get the ArtifactManager backing this session (shared across parent + subagents). */
@@ -203,6 +208,8 @@ export interface ToolSession {
 	getGoalModeState?: () => GoalModeState | undefined;
 	/** Unattended workflow-gate emitter (present only when unattended mode is negotiated). */
 	getWorkflowGateEmitter?: () => WorkflowGateEmitter | undefined;
+	/** Optional per-session restriction for goal tool operations. */
+	goalToolAllowedOps?: readonly ("create" | "get" | "complete" | "resume" | "drop")[];
 	/** Goal runtime for the active agent session. */
 	getGoalRuntime?: () => GoalRuntime | undefined;
 	/** Bridge to the connected client (e.g. ACP editor host). Tools should route fs/terminal/permission requests through this when available. */

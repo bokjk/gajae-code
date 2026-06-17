@@ -7,11 +7,31 @@ import rlmResearchPrompt from "../prompts/system/rlm-research.md" with { type: "
 import type { RlmDataContext } from "./data-context";
 
 /**
- * Tools the model may use in RLM mode. `python` is the RLM research execution
- * tool; `read` and `web_search` are the existing built-ins. Everything else
- * (bash, edit, write, goal, task, skill, browser, eval-js, ...) is excluded.
+ * tool; `read` and `web_search` are the existing built-ins. `bash` is exposed
+ * through the read-only restriction profile below for inspection commands only,
+ * and `goal` is required so RLM sessions cannot finish without explicit goal
+ * completion. Everything else (edit, write, task, skill, browser, eval-js, ...) is excluded.
  */
-export const RLM_TOOL_ALLOWLIST: readonly string[] = ["python", "read", "web_search", "search_tool_bm25"];
+export const RLM_READ_ONLY_BASH_PREFIXES: readonly string[] = [
+	"grep",
+	"rg",
+	"tree",
+	"ls",
+	"pwd",
+	"wc",
+	"du",
+	"file",
+	"stat",
+];
+export const RLM_TOOL_ALLOWLIST: readonly string[] = [
+	"python",
+	"read",
+	"web_search",
+	"search_tool_bm25",
+	"bash",
+	"goal",
+	"complete_research",
+];
 
 export function isRlmToolAllowed(name: string): boolean {
 	return RLM_TOOL_ALLOWLIST.includes(name.toLowerCase());
@@ -37,13 +57,19 @@ export const RLM_RESEARCH_PROMPT: string = rlmResearchPrompt;
 
 /**
  * Build the systemPrompt transform for createAgentSession: appends the research
- * prompt and (when present) the data-context block to the default blocks.
+ * prompt, data context, and prior-notebook replay context to the default blocks.
  */
-export function buildRlmSystemPrompt(dataContext: RlmDataContext | null): (defaultPrompt: string[]) => string[] {
+export function buildRlmSystemPrompt(
+	dataContext: RlmDataContext | null,
+	resumeContext?: string,
+): (defaultPrompt: string[]) => string[] {
 	return (defaultPrompt: string[]): string[] => {
 		const blocks = [...defaultPrompt, rlmResearchPrompt];
 		if (dataContext) {
 			blocks.push(`# Data context (from ${dataContext.path})\n\n${dataContext.content}`);
+		}
+		if (resumeContext && resumeContext.trim().length > 0) {
+			blocks.push(`# Prior notebook replay context\n\n${resumeContext}`);
 		}
 		return blocks;
 	};
