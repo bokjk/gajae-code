@@ -1,12 +1,21 @@
 import { createHash } from "node:crypto";
 import { chunkForDelivery, formatExitAlert, formatLivenessAlert, formatSendFailure } from "./projection";
 import type { RpcAttachmentStore } from "./rpc-attachment-store";
-import type { AttachmentRecord, ChatReply, RpcBackendPort, RpcChunkProgress, RpcDeliveryIdentity } from "./types";
+import { expireMissingPendingActions, gateDedupeKey } from "./rpc-safe-projection";
+import type {
+	AttachmentRecord,
+	ChatReply,
+	RpcBackendPort,
+	RpcChunkProgress,
+	RpcDeliveryIdentity,
+	TelegramSendResult,
+} from "./types";
 
 type RpcEvent = { type: string; [key: string]: unknown };
 type Outbound = {
-	send(message: { chatId: string; reply: ChatReply }): Promise<{ ok: boolean; retryAfterMs?: number }>;
+	send(message: { chatId: string; reply: ChatReply }): Promise<TelegramSendResult>;
 };
+
 type Timer = ReturnType<typeof setInterval> | ReturnType<typeof setTimeout>;
 type Clock = {
 	setInterval?: (callback: () => void, ms: number) => Timer;
@@ -33,6 +42,8 @@ export class RpcEventBridge {
 	#timer: Timer | null = null;
 	#exitAlerted = false;
 	#delivering: Promise<void> | null = null;
+	readonly #onLiveCardUpdate?: () => Promise<void>;
+
 	#lastSeenAt: number;
 	#eventQueue: Promise<void> = Promise.resolve();
 
@@ -44,6 +55,7 @@ export class RpcEventBridge {
 		now?: () => number;
 		livenessMs?: number;
 		clock?: Clock;
+		onLiveCardUpdate?: () => Promise<void>;
 	}) {
 		this.#backend = deps.backend;
 		this.#attachments = deps.attachments;
@@ -52,6 +64,8 @@ export class RpcEventBridge {
 		this.#now = deps.now ?? Date.now;
 		this.#livenessMs = deps.livenessMs ?? 60_000;
 		this.#clock = deps.clock ?? { setInterval, clearInterval, setTimeout, clearTimeout };
+		this.#onLiveCardUpdate = deps.onLiveCardUpdate;
+
 		this.#lastSeenAt = this.#now();
 	}
 
@@ -104,6 +118,9 @@ export class RpcEventBridge {
 		await this.#backend.getLastAssistantText?.().catch(() => undefined);
 		const gates = await this.#backend.getPendingWorkflowGates?.().catch(() => []);
 		console.warn("gtr_rpc_event_bridge_resync", { gates: Array.isArray(gates) ? gates.length : 0 });
+		await this.reconcilePendingGates(Array.isArray(gates) ? gates : []);
+		await this.#onLiveCardUpdate?.();
+
 		const latest = this.#attachments.get();
 		if (this.isDeliverableAttachment(latest) && latest.chunkProgress) {
 			await this.resumeChunkProgress(latest, Array.isArray(messages) ? messages : undefined);
@@ -131,6 +148,8 @@ export class RpcEventBridge {
 	private async handleEvent(event: RpcEvent): Promise<void> {
 		await this.updateLiveness();
 		if (TURN_COMPLETE_EVENTS.has(event.type)) await this.deliverFinalAnswer();
+		await this.#onLiveCardUpdate?.();
+
 		if (EXIT_EVENTS.has(event.type)) await this.alertExitOnce("exit");
 	}
 
@@ -148,6 +167,22 @@ export class RpcEventBridge {
 		await this.#attachments.set({
 			...attachment,
 			liveness: { lastSeenAt: this.#lastSeenAt, timeoutMs: this.#livenessMs },
+			updatedAt: this.#now(),
+		});
+	}
+
+	private async reconcilePendingGates(gates: unknown[]): Promise<void> {
+		const attachment = this.#attachments.get();
+		if (!this.isDeliverableAttachment(attachment)) return;
+		const activeKeys = new Set<string>();
+		for (const gate of gates) {
+			if (typeof gate === "object" && gate !== null && "gate_id" in gate && "context" in gate) {
+				activeKeys.add(gateDedupeKey(gate as Parameters<typeof gateDedupeKey>[0]));
+			}
+		}
+		await this.#attachments.set({
+			...attachment,
+			pendingActions: expireMissingPendingActions(attachment.pendingActions, activeKeys),
 			updatedAt: this.#now(),
 		});
 	}

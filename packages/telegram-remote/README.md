@@ -66,9 +66,10 @@ Set `GJC_TELEGRAM_REMOTE_ENABLE_RICH=false` to fall back to plain text.
 ## RPC mode (single persistent session)
 
 Set `GJC_TELEGRAM_REMOTE_BACKEND=rpc` to make the gateway dial one existing
-owner-only UNIX socket exposed by `gjc launch --output rpc`. The gateway never
-spawns, kills, or tears down that session; it is only a Telegram attach/detach
-remote keyboard for the already-running RPC-mode session.
+owner-only UNIX socket exposed by `gjc launch --mode rpc`. The gateway never
+spawns, kills, or tears down that session; it is a Telegram-safe Codex-like
+controller for the already-running RPC-mode session, not ChatGPT mobile parity
+or an OpenAI secure relay.
 
 RPC mode exposes only `/attach`, `/detach`, `/status`, `/abort`, `/help`, and
 `/start`. Coordinator browsing and lifecycle commands are not available:
@@ -76,10 +77,26 @@ RPC mode exposes only `/attach`, `/detach`, `/status`, `/abort`, `/help`, and
 as unknown in RPC mode. When Bot command registration is enabled, the menu
 advertises only the RPC command set.
 
-The RPC surface is event-driven: agent questions and gates render as inline
-buttons; turn-complete delivery sends only the final assistant text, HTML-escaped
-and chunked to Telegram's 4096-byte message limit; session exit or liveness
-timeout sends exactly one stale-attachment alert.
+`/attach` and `/status` render a safe live card with attachment state,
+connection/controller state, liveness, pending action count, delivery progress,
+and next-action guidance. Telegram stores the live-card message id when the Bot
+API returns one, edits that known message when possible, and falls back to a
+fresh safe card if editing is unavailable or rejected. Card buttons use opaque
+`gtr:v1:<token>` callback data for refresh, status, help, detach, and dismiss.
+
+The RPC surface is event-driven: agent questions and workflow gates render as
+bounded approval/question cards; active-turn text offers **Steer current turn**
+or **Cancel and redirect** without exposing the held text in callback data; and
+turn-complete delivery sends only the deliberate final assistant text,
+HTML-escaped and chunked to Telegram's 4096-byte message limit. Session exit or
+liveness timeout sends exactly one stale-attachment alert.
+
+The host must remain awake, online, and running the RPC session. Files,
+credentials, permissions, local setup, raw logs, diffs, screenshots, test output,
+terminal history, transcripts, prompts, socket paths, artifact paths, file
+contents, environment values, and secrets stay on the host and are not browsed
+through Telegram.
+
 
 The socket OS-ownership boundary is the real security boundary. Same-UID clients
 are fully trusted in v1; protection is for different-UID users and unsafe
@@ -129,7 +146,7 @@ systemctl --user daemon-reload
 systemctl --user enable --now gjc-telegram-remote-coordinator.service
 ```
 
-RPC mode is two services: `gjc-rpc-session.service` owns the persistent `gjc launch --output rpc
+RPC mode is two services: `gjc-rpc-session.service` owns the persistent `gjc launch --mode rpc
 --listen ...` session socket, and `gjc-telegram-remote-rpc.service` dials it. The bot unit uses
 `Wants=` + `After=` + a finite socket wait; `After=` alone is only ordering, not readiness.
 

@@ -61,7 +61,7 @@ function manualClock() {
 }
 
 async function flush() {
-	for (let index = 0; index < 5; index += 1) {
+	for (let index = 0; index < 20; index += 1) {
 		await Promise.resolve();
 		await new Promise(resolve => setTimeout(resolve, 0));
 	}

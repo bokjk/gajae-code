@@ -12,7 +12,10 @@ let backend: FakeRpcBackend;
 let attachments: RpcAttachmentStore;
 let clock: number;
 
-async function makeGateway(overrides: Partial<RpcGatewayPolicy> = {}): Promise<TelegramRpcGateway> {
+async function makeGateway(
+	overrides: Partial<RpcGatewayPolicy> = {},
+	deps: { outbound?: ConstructorParameters<typeof TelegramRpcGateway>[1]["outbound"] } = {},
+): Promise<TelegramRpcGateway> {
 	const dir = await mkdtemp(join(tmpdir(), "gtr-rpc-gateway-"));
 	attachments = await RpcAttachmentStore.open({ stateDir: dir });
 	backend = new FakeRpcBackend();
@@ -24,7 +27,7 @@ async function makeGateway(overrides: Partial<RpcGatewayPolicy> = {}): Promise<T
 			allowAttachSocketArg: false,
 			...overrides,
 		},
-		{ backend, attachments, now: () => clock },
+		{ backend, attachments, now: () => clock, ...deps },
 	);
 }
 
@@ -68,8 +71,9 @@ describe("TelegramRpcGateway", () => {
 		const buttons = activeChoiceButtons(reply);
 		expect(reply.kind).toBe("chat");
 		expect(reply.kind === "chat" ? reply.text : "").toBe("Choose how to apply this input.");
-		expect(buttons.map(button => button.text)).toEqual(["Steer", "Cancel & steer"]);
+		expect(buttons.map(button => button.text)).toEqual(["Steer current turn", "Cancel and redirect", "Dismiss"]);
 		for (const button of buttons) expectOpaqueCallbackData(button.callbackData);
+
 		expect(backend.calls.map(call => [call.method, call.args])).toContainEqual(["prompt", "start work"]);
 		expect(backend.calls.map(call => [call.method, call.args])).not.toContainEqual(["steer", "adjust course"]);
 		expect(backend.calls.map(call => [call.method, call.args])).not.toContainEqual([
@@ -85,10 +89,12 @@ describe("TelegramRpcGateway", () => {
 		const steerText = "new direction";
 		const promptReply = await gateway.handleUpdate(message({ text: steerText }));
 		const callbacks = activeChoiceButtons(promptReply).map(button => button.callbackData);
-		expect(callbacks).toHaveLength(2);
+		expect(callbacks).toHaveLength(3);
 		for (const data of callbacks) expectOpaqueCallbackData(data);
+
 		expect(callbacks.join(" ")).not.toContain(steerText);
-		const update = callback({ data: buttonData(promptReply, "Steer") });
+		const update = callback({ data: buttonData(promptReply, "Steer current turn") });
+
 		expect(update.data).not.toContain(steerText);
 		const reply = await gateway.handleUpdate(update);
 		expect(reply).toEqual({
@@ -108,10 +114,11 @@ describe("TelegramRpcGateway", () => {
 		await gateway.handleUpdate(message({ text: "/attach" }));
 		backend.state = { ...backend.state, session: { status: "active", turnId: "old" } };
 		const firstReply = await gateway.handleUpdate(message({ text: "old direction" }));
-		const oldSteer = buttonData(firstReply, "Steer");
-		const oldCancel = buttonData(firstReply, "Cancel & steer");
+		const oldSteer = buttonData(firstReply, "Steer current turn");
+		const oldCancel = buttonData(firstReply, "Cancel and redirect");
+
 		const secondReply = await gateway.handleUpdate(message({ text: "new direction" }));
-		const newSteer = buttonData(secondReply, "Steer");
+		const newSteer = buttonData(secondReply, "Steer current turn");
 
 		expect(await gateway.handleUpdate(callback({ data: oldSteer }))).toEqual({
 			kind: "callback_answer",
@@ -147,16 +154,19 @@ describe("TelegramRpcGateway", () => {
 		const steerText = "new direction";
 		const promptReply = await gateway.handleUpdate(message({ text: steerText }));
 		const callbacks = activeChoiceButtons(promptReply).map(button => button.callbackData);
-		expect(callbacks).toHaveLength(2);
+		expect(callbacks).toHaveLength(3);
 		for (const data of callbacks) expectOpaqueCallbackData(data);
+
 		expect(callbacks.join(" ")).not.toContain(steerText);
-		const update = callback({ data: buttonData(promptReply, "Cancel & steer") });
+		const update = callback({ data: buttonData(promptReply, "Cancel and redirect") });
+
 		expect(update.data).not.toBe("gtr:v1:cancel-steer");
 		expect(update.data).not.toContain(steerText);
 		const reply = await gateway.handleUpdate(update);
 		expect(reply).toEqual({
 			kind: "callback_answer",
-			callbackAnswer: { text: "Cancel & steer queued." },
+			callbackAnswer: { text: "Redirect queued." },
+
 			sendMessage: false,
 		});
 		expect(backend.calls.map(call => [call.method, call.args])).not.toContainEqual(["steer", steerText]);
@@ -186,7 +196,7 @@ describe("TelegramRpcGateway", () => {
 		backend.state = { ...backend.state, session: { status: "active", turnId: "old" } };
 		const promptReply = await gateway.handleUpdate(message({ text: "do not leak" }));
 		const reply = await gateway.handleUpdate(
-			callback({ userId: "999", chatId: "999", data: buttonData(promptReply, "Steer") }),
+			callback({ userId: "999", chatId: "999", data: buttonData(promptReply, "Steer current turn") }),
 		);
 		expect(reply).toEqual({
 			kind: "callback_answer",
@@ -195,6 +205,86 @@ describe("TelegramRpcGateway", () => {
 		});
 		expect(backend.countOf("steer")).toBe(0);
 		expect(backend.countOf("abortAndPrompt")).toBe(0);
+	});
+
+	test("attach and status live cards persist returned Telegram message ids", async () => {
+		const gateway = await makeGateway();
+		const attachReply = await gateway.handleUpdate(message({ text: "/attach" }));
+		expect(attachReply.kind).toBe("chat");
+		expect(attachReply.kind === "chat" ? attachReply.text : "").toContain("<b>GJC remote</b>");
+		expect(attachReply.kind === "chat" ? attachReply.text : "").not.toContain("/tmp/gjc.sock");
+		if (attachReply.kind === "chat") await attachReply.onDelivered?.({ ok: true, messageId: 77 });
+		expect(attachments.get()?.liveCardMessageId).toBe(77);
+		expect(attachments.get()?.liveCardFingerprint).toBeString();
+
+		const statusReply = await gateway.handleUpdate(message({ text: "/status" }));
+		expect(statusReply.kind).toBe("chat");
+		expect(statusReply.kind === "chat" ? statusReply.edit?.messageId : undefined).toBe(77);
+		if (statusReply.kind === "chat") await statusReply.onDelivered?.({ ok: true, messageId: 88 });
+		expect(attachments.get()?.liveCardMessageId).toBe(88);
+	});
+
+	test("live card refresh, help, dismiss, and detach callbacks are opaque and safe", async () => {
+		const gateway = await makeGateway();
+		const attachReply = await gateway.handleUpdate(message({ text: "/attach" }));
+		if (attachReply.kind === "chat") await attachReply.onDelivered?.({ ok: true, messageId: 10 });
+		const refresh = buttonData(attachReply, "Refresh");
+		const help = buttonData(attachReply, "Help");
+		const dismiss = buttonData(attachReply, "Dismiss");
+		const detach = buttonData(attachReply, "Detach");
+		for (const data of [refresh, help, dismiss, detach]) expectOpaqueCallbackData(data);
+		backend.state = { ...backend.state, connected: false };
+
+		const refreshed = await gateway.handleUpdate(callback({ chatId: "100", messageId: 10, data: refresh }));
+		expect(refreshed.kind).toBe("chat");
+		expect(refreshed.kind === "chat" ? refreshed.text : "").toContain("<b>GJC remote</b>");
+		expect(refreshed.kind === "chat" ? refreshed.edit?.messageId : undefined).toBe(10);
+
+		const helpReply = await gateway.handleUpdate(callback({ chatId: "100", messageId: 10, data: help }));
+		expect(helpReply.kind).toBe("chat");
+		expect(helpReply.kind === "chat" ? helpReply.text : "").toContain("already-running local RPC session");
+
+		expect(await gateway.handleUpdate(callback({ chatId: "100", data: dismiss }))).toEqual({
+			kind: "callback_answer",
+			callbackAnswer: { text: "Dismissed." },
+			sendMessage: false,
+		});
+		expect(await gateway.handleUpdate(callback({ chatId: "100", data: detach }))).toEqual({
+			kind: "callback_answer",
+			callbackAnswer: { text: "Detached. Session keeps running." },
+			sendMessage: false,
+		});
+		expect(attachments.get()).toBeNull();
+	});
+
+	test("event live-card updates fall back to fresh sends and persist returned ids", async () => {
+		const outbound: Array<{ reply: { text: string; edit?: { messageId: string | number } } }> = [];
+		let nextMessageId = 200;
+		const gateway = await makeGateway(
+			{},
+			{
+				outbound: {
+					send: async message => {
+						outbound.push(message as { reply: { text: string; edit?: { messageId: string | number } } });
+						const result = { ok: true, messageId: nextMessageId++ };
+						await message.reply.onDelivered?.(result);
+						return result;
+					},
+				},
+			},
+		);
+		await gateway.handleUpdate(message({ text: "/attach" }));
+		backend.emitEvent({ type: "turn_start" });
+		await new Promise(resolve => setTimeout(resolve, 0));
+		await new Promise(resolve => setTimeout(resolve, 0));
+		expect(outbound.at(-1)?.reply.edit).toBeUndefined();
+		expect(attachments.get()?.liveCardMessageId).toBe(200);
+
+		backend.emitEvent({ type: "turn_progress" });
+		await new Promise(resolve => setTimeout(resolve, 0));
+		await new Promise(resolve => setTimeout(resolve, 0));
+		expect(outbound.at(-1)?.reply.edit?.messageId).toBe(200);
+		expect(attachments.get()?.liveCardMessageId).toBe(201);
 	});
 
 	test("timeout replies immediately with queued while preserving in-flight input", async () => {
@@ -273,7 +363,7 @@ describe("TelegramRpcGateway", () => {
 
 		await resendGateway.restorePersistedAttachment();
 
-		expect(sent.map(item => item.reply.text)).toEqual(["tail"]);
+		expect(sent.map(item => item.reply.text).at(-1)).toBe("tail");
 		expect(attachments.get()?.chunkProgress).toBeUndefined();
 		expect(attachments.get()?.deliveryIdentities).toHaveLength(1);
 	});

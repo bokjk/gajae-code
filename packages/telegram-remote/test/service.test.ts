@@ -139,7 +139,8 @@ test("RPC mode does not instantiate or browse the coordinator", async () => {
 		{ coordinator, rpcBackend, transport },
 	);
 	expect(transport.sent[0]?.text).toBe(MESSAGES.unknownCommand);
-	expect(transport.sent[1]?.text).toBe("Detached.");
+	expect(transport.sent[1]?.text).toContain("<b>GJC remote</b>");
+
 	expect(coordinator.calls).toHaveLength(0);
 	expect(rpcBackend.connectCalls).toBe(0);
 });
@@ -186,7 +187,8 @@ test("RPC mode restores persisted attachment and replays pending gate on startup
 
 	expect(rpcBackend.calls).toContainEqual({ method: "connect", args: "/tmp/restored.sock" });
 	expect(rpcBackend.countOf("getPendingWorkflowGates")).toBe(2);
-	expect(transport.outbound).toHaveLength(1);
-	expect(transport.outbound[0].chatId).toBe("100");
-	expect(transport.outbound[0].reply.text).toContain("Approve restored gate?");
+	expect(transport.outbound).toHaveLength(2);
+	expect(transport.outbound.map(item => item.chatId)).toEqual(["100", "100"]);
+	expect(transport.outbound[0].reply.text).toContain("Approve?");
+	expect(transport.outbound[1].reply.text).toContain("<b>GJC remote</b>");
 });

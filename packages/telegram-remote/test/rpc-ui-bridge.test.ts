@@ -223,7 +223,7 @@ describe("RpcUiBridge", () => {
 		await Promise.resolve();
 		expect(sent.map(item => item.chatId)).toEqual(["900", "900"]);
 		expect(sent[0].reply.text).toContain("Pick one");
-		expect(sent[1].reply.text).toContain("Approve bounded plan?");
+		expect(sent[1].reply.text).toContain("Approve?");
 	});
 
 	test("gateway attach replays pending workflow gates to the attached chat", async () => {
@@ -234,7 +234,7 @@ describe("RpcUiBridge", () => {
 		await gateway.handleUpdate(message({ chatId: "900", userId: "100", text: "/attach" }));
 		expect(sent).toHaveLength(1);
 		expect(sent[0].chatId).toBe("900");
-		expect(sent[0].reply.text).toContain("Approve bounded plan?");
+		expect(sent[0].reply.text).toContain("Approve?");
 		expect(backend.countOf("getPendingWorkflowGates")).toBe(1);
 	});
 

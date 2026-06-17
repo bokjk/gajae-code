@@ -41,6 +41,34 @@ describe("RpcAttachmentStore", () => {
 		expect(JSON.parse(text).attachment.socketPath).toBe("/tmp/gjc.sock");
 	});
 
+	test("persists safe live-card and pending-action UI state", async () => {
+		const dir = await tempDir();
+		const store = await RpcAttachmentStore.open({ stateDir: dir });
+		await store.set(
+			attachment({
+				liveCardMessageId: 42,
+				liveCardUpdatedAt: 9,
+				liveCardFingerprint: "abc123",
+				pendingActions: [
+					{
+						type: "workflow_gate",
+						gateIdHash: "hash",
+						dedupeKey: "gate:hash",
+						label: "Approve?",
+						createdAt: 1,
+						expiresAt: 10,
+						deliveredMessageId: 55,
+						status: "pending",
+						optionHashes: ["yes", "no"],
+					},
+				],
+			}),
+		);
+		const reloaded = await RpcAttachmentStore.open({ stateDir: dir });
+		expect(reloaded.get()?.liveCardMessageId).toBe(42);
+		expect(reloaded.get()?.pendingActions?.[0]?.dedupeKey).toBe("gate:hash");
+	});
+
 	test("corrupt JSON fails closed to empty", async () => {
 		const dir = await tempDir();
 		await writeFile(join(dir, RPC_ATTACHMENT_FILE_NAME), "{bad", "utf8");

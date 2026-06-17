@@ -3,7 +3,15 @@ import { MESSAGES } from "./messages";
 import type { RpcAttachmentStore } from "./rpc-attachment-store";
 import { type RpcControlSignal, RpcControlStateMachine } from "./rpc-control-state";
 import { RpcEventBridge } from "./rpc-event-bridge";
+import {
+	clearPendingAction,
+	renderRpcLiveCard,
+	renderRpcOnboarding,
+	safeCallbackAnswer,
+	upsertPendingAction,
+} from "./rpc-safe-projection";
 import { extensionUiResponseFromToken, RpcUiBridge } from "./rpc-ui-bridge";
+
 import { CallbackTokenStore } from "./tokens";
 import type {
 	AttachmentRecord,
@@ -11,6 +19,7 @@ import type {
 	IncomingMessage,
 	IncomingUpdate,
 	OutgoingReply,
+	PendingActionSummary,
 	RpcBackendPort,
 	TelegramTransport,
 } from "./types";
@@ -103,14 +112,18 @@ export class TelegramRpcGateway {
 		switch (command.kind) {
 			case "help":
 			case "start":
-				return this.chat("Commands: /attach, /detach, /status, /abort");
+				return this.html(renderRpcOnboarding());
+
 			case "attach":
 				return this.attach(message, command.socketPath);
 			case "detach":
 				this.#eventBridge?.stop();
 				this.#eventBridge = null;
+				this.#uiBridge?.stop();
+				this.#uiBridge = null;
 				await this.#attachments.clear();
 				return this.chat("Detached. Session keeps running.");
+
 			case "status":
 				return this.status();
 			case "abort":
@@ -143,6 +156,8 @@ export class TelegramRpcGateway {
 			updatedAt: this.#now(),
 		};
 		await this.#attachments.set(attachment);
+		await this.clearAllPendingActions();
+
 		this.#uiBridge?.stop();
 		this.#eventBridge?.stop();
 		this.#uiBridge = this.createUiBridge(attachment);
@@ -151,15 +166,16 @@ export class TelegramRpcGateway {
 		this.#eventBridge.start();
 		await this.#control.attach();
 		await this.#uiBridge.replayPendingWorkflowGates();
-		await this.#attachments.set({ ...attachment, controllerState: this.#control.state, updatedAt: this.#now() });
-		return this.chat("Attached to RPC session.");
+		const updated = { ...attachment, controllerState: this.#control.state, updatedAt: this.#now() };
+		await this.#attachments.set(updated);
+		return this.liveCardReply(updated);
 	}
 
-	private async status(): Promise<ChatReply> {
+	private async status(editMessageId?: string | number | null): Promise<ChatReply> {
 		const attachment = this.#attachments.get();
-		if (!attachment) return this.chat("Detached.");
-		const state = await this.#backend.getState();
-		return this.chat(state.connected ? "Attached." : "Attachment is stale.");
+		if (!attachment) return this.html(renderRpcLiveCard({ attachment: null, now: this.#now() }).text);
+		await this.updateAttachmentState();
+		return this.liveCardReply(this.#attachments.get() ?? attachment, editMessageId ?? undefined);
 	}
 
 	private async submitText(text: string): Promise<ChatReply> {
@@ -191,9 +207,10 @@ export class TelegramRpcGateway {
 				? this.chat("Choose how to apply this input.", {
 						inline_keyboard: [
 							[
-								{ text: "Steer", callbackData: this.issueRpcToken("steer_held", attachment) },
-								{ text: "Cancel & steer", callbackData: this.issueRpcToken("cancel_steer", attachment) },
+								{ text: "Steer current turn", callbackData: this.issueRpcToken("steer_held", attachment) },
+								{ text: "Cancel and redirect", callbackData: this.issueRpcToken("cancel_steer", attachment) },
 							],
+							[{ text: "Dismiss", callbackData: this.issueRpcToken("dismiss_card", attachment) }],
 						],
 					})
 				: this.chat("Queued.");
@@ -217,6 +234,42 @@ export class TelegramRpcGateway {
 			return { kind: "callback_answer", callbackAnswer: { text: MESSAGES.callbackInvalid }, sendMessage: false };
 		}
 		const record = tokenResolution.record;
+		if (record.action === "live_refresh" || record.action === "live_status") {
+			const attachment = this.#attachments.get();
+			if (!attachment || attachment.stale) return this.callbackOnly("This card is stale. Send /status.");
+			await this.updateAttachmentState();
+			const latest = this.#attachments.get() ?? attachment;
+			const projected = await this.projectLiveCard(latest);
+			if (record.action === "live_refresh" && latest.liveCardFingerprint === projected.fingerprint) {
+				return this.callbackOnly("Up to date.");
+			}
+			return this.liveCardReply(latest, update.messageId ?? undefined, { text: safeCallbackAnswer("Updated.") });
+		}
+		if (record.action === "live_help") {
+			return {
+				kind: "chat",
+				text: renderRpcOnboarding(),
+				parseMode: "HTML",
+				edit: update.messageId === null ? undefined : { messageId: update.messageId },
+				callbackAnswer: { text: "Help." },
+			};
+		}
+		if (record.action === "live_detach") {
+			this.#tokens.markUsed(tokenResolution.token);
+			this.#eventBridge?.stop();
+			this.#eventBridge = null;
+			this.#uiBridge?.stop();
+			this.#uiBridge = null;
+			await this.#attachments.clear();
+			await this.clearAllPendingActions();
+
+			return this.callbackOnly("Detached. Session keeps running.");
+		}
+		if (record.action === "dismiss_card") {
+			this.#tokens.markUsed(tokenResolution.token);
+			return this.callbackOnly("Dismissed.");
+		}
+
 		if (record.action === "abort") {
 			this.#tokens.markUsed(tokenResolution.token);
 			this.clearPendingSteerText(this.#attachments.get());
@@ -238,26 +291,48 @@ export class TelegramRpcGateway {
 			}
 			await this.#control.abortAndPrompt(text);
 			await this.updateAttachmentState();
-			return { kind: "callback_answer", callbackAnswer: { text: "Cancel & steer queued." }, sendMessage: false };
+			return { kind: "callback_answer", callbackAnswer: { text: "Redirect queued." }, sendMessage: false };
 		}
 		if (record.action === "ui_select" || record.action === "ui_confirm") {
 			const sent = await this.respondExtensionUi(extensionUiResponseFromToken(record));
 			if (!sent) return this.callbackRejected();
 			this.#tokens.markUsed(tokenResolution.token);
+			if (record.dedupeKey) await this.clearPendingAction(record.dedupeKey);
 			return { kind: "callback_answer", callbackAnswer: { text: "Sent." }, sendMessage: false };
 		}
 		if (record.action === "gate_answer") {
 			const accepted = await this.respondGate(record.gateId, record.answer, record.idempotencyKey);
 			if (!accepted) return this.callbackRejected();
 			this.#tokens.markUsed(tokenResolution.token);
+			if (record.dedupeKey) await this.clearPendingAction(record.dedupeKey);
 			return { kind: "callback_answer", callbackAnswer: { text: MESSAGES.callbackDone }, sendMessage: false };
 		}
 		return { kind: "callback_answer", callbackAnswer: { text: MESSAGES.callbackInvalid }, sendMessage: false };
 	}
 
-	private issueRpcToken(action: "steer_held" | "cancel_steer" | "abort", attachment: AttachmentRecord): string {
+	private issueRpcToken(
+		action:
+			| "steer_held"
+			| "cancel_steer"
+			| "abort"
+			| "live_refresh"
+			| "live_status"
+			| "live_help"
+			| "live_detach"
+			| "dismiss_card",
+		attachment: AttachmentRecord,
+	): string {
 		const base = { chatId: attachment.chatId, userId: attachment.userId, ttlMs: this.#rpcUiTtlMs };
-		if (action === "abort") return this.#tokens.issue({ ...base, action });
+		if (
+			action === "abort" ||
+			action === "live_refresh" ||
+			action === "live_status" ||
+			action === "live_help" ||
+			action === "live_detach" ||
+			action === "dismiss_card"
+		) {
+			return this.#tokens.issue({ ...base, action });
+		}
 		return this.#tokens.issue({ ...base, action, heldTextId: this.#pendingSteerTextId ?? "" });
 	}
 
@@ -291,6 +366,12 @@ export class TelegramRpcGateway {
 			onMessage: async reply => {
 				await this.#outbound?.send?.({ chatId: attachment.chatId, reply });
 			},
+			onPendingAction: summary => this.upsertPendingAction(summary),
+			onClearPendingAction: dedupeKey => this.clearPendingAction(dedupeKey),
+			isPendingActionActive: dedupeKey =>
+				this.#attachments
+					.get()
+					?.pendingActions?.some(action => action.dedupeKey === dedupeKey && action.status === "pending") === true,
 		});
 	}
 
@@ -302,6 +383,7 @@ export class TelegramRpcGateway {
 			outbound: this.#outbound?.send ? { send: message => this.#outbound!.send!(message) } : undefined,
 			now: this.#now,
 			livenessMs: this.#livenessMs,
+			onLiveCardUpdate: () => this.sendLiveCardUpdate(),
 		});
 	}
 
@@ -339,6 +421,32 @@ export class TelegramRpcGateway {
 		await this.#attachments.set({ ...attachment, controllerState: state, updatedAt: this.#now() });
 	}
 
+	private async upsertPendingAction(summary: PendingActionSummary): Promise<void> {
+		const attachment = this.#attachments.get();
+		if (!attachment || attachment.stale) return;
+		await this.#attachments.set({
+			...attachment,
+			pendingActions: upsertPendingAction(attachment.pendingActions, summary),
+			updatedAt: this.#now(),
+		});
+	}
+
+	private async clearPendingAction(dedupeKey: string): Promise<void> {
+		const attachment = this.#attachments.get();
+		if (!attachment) return;
+		await this.#attachments.set({
+			...attachment,
+			pendingActions: clearPendingAction(attachment.pendingActions, dedupeKey),
+			updatedAt: this.#now(),
+		});
+	}
+
+	private async clearAllPendingActions(): Promise<void> {
+		const attachment = this.#attachments.get();
+		if (!attachment) return;
+		await this.#attachments.set({ ...attachment, pendingActions: [], updatedAt: this.#now() });
+	}
+
 	private isControlIdleEvent(event: { type: string; [key: string]: unknown }): boolean {
 		return (
 			event.type === "turn_end" ||
@@ -354,6 +462,81 @@ export class TelegramRpcGateway {
 
 	private chat(text: string, replyMarkup?: ChatReply["replyMarkup"]): ChatReply {
 		return replyMarkup ? { kind: "chat", text, replyMarkup } : { kind: "chat", text };
+	}
+
+	private html(text: string, replyMarkup?: ChatReply["replyMarkup"]): ChatReply {
+		return replyMarkup
+			? { kind: "chat", text, parseMode: "HTML", replyMarkup }
+			: { kind: "chat", text, parseMode: "HTML" };
+	}
+
+	private callbackOnly(text: string): OutgoingReply {
+		return { kind: "callback_answer", callbackAnswer: { text: safeCallbackAnswer(text) }, sendMessage: false };
+	}
+
+	private async projectLiveCard(attachment: AttachmentRecord | null) {
+		const backendState = await this.#backend.getState().catch(() => undefined);
+		return renderRpcLiveCard({ attachment, backendState, now: this.#now() });
+	}
+
+	private async liveCardReply(
+		attachment: AttachmentRecord,
+		editMessageId?: string | number,
+		callbackAnswer?: ChatReply["callbackAnswer"],
+	): Promise<ChatReply> {
+		const projected = await this.projectLiveCard(attachment);
+		const replyMarkup = this.liveCardButtons(attachment);
+		const fingerprint = projected.fingerprint;
+		const targetMessageId = editMessageId ?? attachment.liveCardMessageId;
+		return {
+			kind: "chat",
+			text: projected.text,
+			parseMode: "HTML",
+			replyMarkup,
+			...(targetMessageId !== undefined ? { edit: { messageId: targetMessageId } } : {}),
+			...(callbackAnswer ? { callbackAnswer } : {}),
+			onDelivered: result => {
+				if (result.ok && result.messageId !== undefined) {
+					return this.persistLiveCardDelivery(fingerprint, result.messageId);
+				}
+			},
+		};
+	}
+
+	private async sendLiveCardUpdate(): Promise<void> {
+		const attachment = this.#attachments.get();
+		if (!attachment || attachment.stale || !this.#outbound?.send) return;
+		const reply = await this.liveCardReply(attachment, attachment.liveCardMessageId);
+		const result = await this.#outbound.send({ chatId: attachment.chatId, reply });
+		await reply.onDelivered?.(result);
+	}
+
+	private liveCardButtons(attachment: AttachmentRecord): ChatReply["replyMarkup"] {
+		return {
+			inline_keyboard: [
+				[
+					{ text: "Refresh", callbackData: this.issueRpcToken("live_refresh", attachment) },
+					{ text: "Status", callbackData: this.issueRpcToken("live_status", attachment) },
+					{ text: "Help", callbackData: this.issueRpcToken("live_help", attachment) },
+				],
+				[
+					{ text: "Detach", callbackData: this.issueRpcToken("live_detach", attachment) },
+					{ text: "Dismiss", callbackData: this.issueRpcToken("dismiss_card", attachment) },
+				],
+			],
+		};
+	}
+
+	private async persistLiveCardDelivery(fingerprint: string, messageId: string | number): Promise<void> {
+		const attachment = this.#attachments.get();
+		if (!attachment || attachment.stale) return;
+		await this.#attachments.set({
+			...attachment,
+			liveCardMessageId: messageId,
+			liveCardFingerprint: fingerprint,
+			liveCardUpdatedAt: this.#now(),
+			updatedAt: this.#now(),
+		});
 	}
 
 	private reconnectReplyIfNeeded(): string | null {

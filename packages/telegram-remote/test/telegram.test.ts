@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { type TelegramBotApiOptions, TelegramBotApiTransport } from "../src/telegram";
-import type { IncomingUpdate, OutgoingReply } from "../src/types";
+import type { ChatReply, IncomingUpdate, OutgoingReply } from "../src/types";
 
 interface RecordedCall {
 	method: string;
@@ -49,7 +49,8 @@ const callbackUpdate = {
 
 async function sendWithResult(
 	apiResult: unknown,
-): Promise<{ result: { ok: boolean; retryAfterMs?: number }; calls: RecordedCall[] }> {
+	reply: ChatReply = { kind: "chat", text: "hello", parseMode: "HTML" },
+): Promise<{ result: { ok: boolean; retryAfterMs?: number; messageId?: string | number }; calls: RecordedCall[] }> {
 	const calls: RecordedCall[] = [];
 	const fetchImpl = (async (url: string, init?: { body?: string }) => {
 		const method = String(url).split("/").pop() ?? "";
@@ -57,8 +58,14 @@ async function sendWithResult(
 		calls.push({ method, body });
 		return jsonResponse(apiResult);
 	}) as unknown as typeof fetch;
-	const transport = new TelegramBotApiTransport({ botToken: "t", fetchImpl, registerBotCommands: false });
-	const result = await transport.send({ chatId: "100", reply: { kind: "chat", text: "hello", parseMode: "HTML" } });
+	const transport = new TelegramBotApiTransport({
+		botToken: "t",
+		fetchImpl,
+		registerBotCommands: false,
+		enableEditMessageText: true,
+	});
+	const result = await transport.send({ chatId: "100", reply });
+
 	return { result, calls };
 }
 
@@ -178,9 +185,9 @@ describe("TelegramBotApiTransport", () => {
 		expect(got?.kind === "callback_query" && got.data).toBe("");
 	});
 
-	test("send() posts sendMessage with reply body and returns ok true", async () => {
+	test("send() posts sendMessage with reply body and returns the Telegram message id", async () => {
 		const { result, calls } = await sendWithResult({ ok: true, result: { message_id: 1 } });
-		expect(result).toEqual({ ok: true });
+		expect(result).toEqual({ ok: true, messageId: 1 });
 		expect(calls).toEqual([{ method: "sendMessage", body: { chat_id: "100", text: "hello", parse_mode: "HTML" } }]);
 	});
 
@@ -188,5 +195,37 @@ describe("TelegramBotApiTransport", () => {
 		const { result, calls } = await sendWithResult({ ok: false, parameters: { retry_after: 3 } });
 		expect(result).toEqual({ ok: false, retryAfterMs: 3000 });
 		expect(calls[0]?.method).toBe("sendMessage");
+	});
+
+	test("send() edits known live-card message ids and preserves id when Telegram returns true", async () => {
+		const { result, calls } = await sendWithResult(
+			{ ok: true, result: true },
+			{ kind: "chat", text: "updated", edit: { messageId: 42 } },
+		);
+		expect(result).toEqual({ ok: true, messageId: 42 });
+		expect(calls).toEqual([{ method: "editMessageText", body: { chat_id: "100", message_id: 42, text: "updated" } }]);
+	});
+
+	test("send() falls back from failed edit to fresh send and returns the new id", async () => {
+		const calls: RecordedCall[] = [];
+		const fetchImpl = (async (url: string, init?: { body?: string }) => {
+			const method = String(url).split("/").pop() ?? "";
+			const body = init?.body ? (JSON.parse(init.body) as Record<string, unknown>) : {};
+			calls.push({ method, body });
+			if (method === "editMessageText") return jsonResponse({ ok: false });
+			return jsonResponse({ ok: true, result: { message_id: 99 } });
+		}) as unknown as typeof fetch;
+		const transport = new TelegramBotApiTransport({
+			botToken: "t",
+			fetchImpl,
+			registerBotCommands: false,
+			enableEditMessageText: true,
+		});
+		const result = await transport.send({
+			chatId: "100",
+			reply: { kind: "chat", text: "updated", edit: { messageId: 42 } },
+		});
+		expect(result).toEqual({ ok: true, messageId: 99 });
+		expect(calls.map(call => call.method)).toEqual(["editMessageText", "sendMessage"]);
 	});
 });

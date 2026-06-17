@@ -4,7 +4,14 @@
  * rich replies (HTML parse mode + inline keyboards), and ALWAYS answers callback
  * queries — never inferring the callback answer by string-matching reply text.
  */
-import type { CallbackAnswer, ChatReply, IncomingUpdate, OutgoingReply, TelegramTransport } from "./types";
+import type {
+	CallbackAnswer,
+	ChatReply,
+	IncomingUpdate,
+	OutgoingReply,
+	TelegramSendResult,
+	TelegramTransport,
+} from "./types";
 
 const DEFAULT_API_BASE = "https://api.telegram.org";
 const DEFAULT_POLL_TIMEOUT_SEC = 30;
@@ -145,16 +152,10 @@ export class TelegramBotApiTransport implements TelegramTransport {
 		this.running = false;
 	}
 
-	async send(message: { chatId: string; reply: ChatReply }): Promise<{ ok: boolean; retryAfterMs?: number }> {
-		const result = await this.postResult("sendMessage", {
-			chat_id: message.chatId,
-			...this.messageBody(message.reply),
-		});
-		if (result.ok) return { ok: true };
-		const retryAfter = result.body?.parameters?.retry_after;
-		if (typeof retryAfter === "number" && Number.isFinite(retryAfter))
-			return { ok: false, retryAfterMs: retryAfter * 1000 };
-		return { ok: false };
+	async send(message: { chatId: string; reply: ChatReply }): Promise<TelegramSendResult> {
+		const result = await this.deliverChat(message.chatId, message.reply);
+		await message.reply.onDelivered?.(result);
+		return result;
 	}
 
 	/** Register the Bot command menu once (non-fatal). */
@@ -184,8 +185,10 @@ export class TelegramBotApiTransport implements TelegramTransport {
 			}
 			// Send/edit only for chat replies; answer-only replies must not touch chat.
 			if (reply !== null && typeof reply !== "string" && reply.kind === "chat" && update.chatId !== null) {
-				await this.deliverChat(update.chatId, reply);
+				const result = await this.deliverChat(update.chatId, reply);
+				await reply.onDelivered?.(result);
 			}
+
 			return;
 		}
 
@@ -198,16 +201,17 @@ export class TelegramBotApiTransport implements TelegramTransport {
 		if (typeof reply === "string") {
 			await this.sendMessage(update.chatId, { kind: "chat", text: reply });
 		} else if (reply.kind === "chat") {
-			await this.deliverChat(update.chatId, reply);
+			const result = await this.deliverChat(update.chatId, reply);
+			await reply.onDelivered?.(result);
 		}
 	}
 
-	private async deliverChat(chatId: string, reply: ChatReply): Promise<void> {
+	private async deliverChat(chatId: string, reply: ChatReply): Promise<TelegramSendResult> {
 		if (reply.edit && this.enableEdit && reply.edit.messageId !== undefined) {
 			const edited = await this.editMessageText(chatId, reply.edit.messageId, reply);
-			if (edited) return;
+			if (edited.ok) return edited;
 		}
-		await this.sendMessage(chatId, reply);
+		return this.sendMessage(chatId, reply);
 	}
 
 	private async getUpdates(): Promise<TelegramUpdate[]> {
@@ -242,12 +246,27 @@ export class TelegramBotApiTransport implements TelegramTransport {
 		return body;
 	}
 
-	private async sendMessage(chatId: string, reply: ChatReply): Promise<void> {
-		await this.post("sendMessage", { chat_id: chatId, ...this.messageBody(reply) });
+	private async sendMessage(chatId: string, reply: ChatReply): Promise<TelegramSendResult> {
+		const result = await this.postResult("sendMessage", { chat_id: chatId, ...this.messageBody(reply) });
+		if (result.ok) return { ok: true, messageId: readMessageId(result.body?.result) };
+		const retryAfter = result.body?.parameters?.retry_after;
+		if (typeof retryAfter === "number" && Number.isFinite(retryAfter))
+			return { ok: false, retryAfterMs: retryAfter * 1000 };
+		return { ok: false };
 	}
 
-	private async editMessageText(chatId: string, messageId: string | number, reply: ChatReply): Promise<boolean> {
-		return this.post("editMessageText", { chat_id: chatId, message_id: messageId, ...this.messageBody(reply) });
+	private async editMessageText(
+		chatId: string,
+		messageId: string | number,
+		reply: ChatReply,
+	): Promise<TelegramSendResult> {
+		const result = await this.postResult("editMessageText", {
+			chat_id: chatId,
+			message_id: messageId,
+			...this.messageBody(reply),
+		});
+		if (!result.ok) return { ok: false };
+		return { ok: true, messageId: readMessageId(result.body?.result) ?? messageId };
 	}
 
 	private async answerCallbackQuery(callbackQueryId: string, answer: CallbackAnswer | undefined): Promise<void> {
@@ -265,17 +284,28 @@ export class TelegramBotApiTransport implements TelegramTransport {
 	private async postResult(
 		method: string,
 		body: Record<string, unknown>,
-	): Promise<{ ok: boolean; body: { parameters?: { retry_after?: unknown } } | null }> {
+	): Promise<{ ok: boolean; body: { parameters?: { retry_after?: unknown }; result?: unknown } | null }> {
 		try {
 			const response = await this.fetchImpl(`${this.endpoint}/${method}`, {
 				method: "POST",
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify(body),
 			});
-			const data = (await response.json()) as { ok?: boolean; parameters?: { retry_after?: unknown } };
+			const data = (await response.json()) as {
+				ok?: boolean;
+				parameters?: { retry_after?: unknown };
+				result?: unknown;
+			};
+
 			return { ok: data.ok === true, body: data };
 		} catch {
 			return { ok: false, body: null };
 		}
 	}
+}
+
+function readMessageId(value: unknown): string | number | undefined {
+	if (typeof value !== "object" || value === null) return undefined;
+	const messageId = (value as { message_id?: unknown }).message_id;
+	return typeof messageId === "string" || typeof messageId === "number" ? messageId : undefined;
 }

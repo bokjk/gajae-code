@@ -3,6 +3,7 @@ import { dirname, join } from "node:path";
 import { resolveStateDir } from "./subscriptions";
 import type {
 	AttachmentRecord,
+	PendingActionSummary,
 	RpcChunkProgress,
 	RpcControlState,
 	RpcDeliveryIdentity,
@@ -62,6 +63,35 @@ function isChunkProgress(value: unknown): value is RpcChunkProgress {
 	);
 }
 
+function isPendingActionSummary(value: unknown): value is PendingActionSummary {
+	if (typeof value !== "object" || value === null) return false;
+	const record = value as Record<string, unknown>;
+	return (
+		(record.type === "workflow_gate" ||
+			record.type === "ui_select" ||
+			record.type === "ui_confirm" ||
+			record.type === "ui_text" ||
+			record.type === "ui_editor") &&
+		typeof record.dedupeKey === "string" &&
+		typeof record.label === "string" &&
+		typeof record.createdAt === "number" &&
+		Number.isFinite(record.createdAt) &&
+		typeof record.expiresAt === "number" &&
+		Number.isFinite(record.expiresAt) &&
+		(record.status === "pending" ||
+			record.status === "answered" ||
+			record.status === "cancelled" ||
+			record.status === "expired" ||
+			record.status === "rejected") &&
+		(record.requestIdHash === undefined || typeof record.requestIdHash === "string") &&
+		(record.gateIdHash === undefined || typeof record.gateIdHash === "string") &&
+		(record.deliveredMessageId === undefined ||
+			typeof record.deliveredMessageId === "string" ||
+			typeof record.deliveredMessageId === "number") &&
+		(record.optionHashes === undefined || isStringArray(record.optionHashes))
+	);
+}
+
 function isAttachment(value: unknown): value is AttachmentRecord {
 	if (typeof value !== "object" || value === null) return false;
 	const record = value as Record<string, unknown>;
@@ -76,6 +106,14 @@ function isAttachment(value: unknown): value is AttachmentRecord {
 		Array.isArray(record.deliveryIdentities) &&
 		record.deliveryIdentities.every(isDeliveryIdentity) &&
 		(record.chunkProgress === undefined || isChunkProgress(record.chunkProgress)) &&
+		(record.liveCardMessageId === undefined ||
+			typeof record.liveCardMessageId === "string" ||
+			typeof record.liveCardMessageId === "number") &&
+		(record.liveCardUpdatedAt === undefined ||
+			(typeof record.liveCardUpdatedAt === "number" && Number.isFinite(record.liveCardUpdatedAt))) &&
+		(record.liveCardFingerprint === undefined || typeof record.liveCardFingerprint === "string") &&
+		(record.pendingActions === undefined ||
+			(Array.isArray(record.pendingActions) && record.pendingActions.every(isPendingActionSummary))) &&
 		typeof record.updatedAt === "number" &&
 		Number.isFinite(record.updatedAt)
 	);
@@ -95,6 +133,12 @@ function normalizeAttachment(attachment: AttachmentRecord): AttachmentRecord {
 		deliveryIdentities: attachment.deliveryIdentities.map(identity => ({ ...identity })),
 		...(attachment.chunkProgress ? { chunkProgress: { ...attachment.chunkProgress } } : {}),
 		updatedAt: attachment.updatedAt,
+		...(attachment.liveCardMessageId !== undefined ? { liveCardMessageId: attachment.liveCardMessageId } : {}),
+		...(attachment.liveCardUpdatedAt !== undefined ? { liveCardUpdatedAt: attachment.liveCardUpdatedAt } : {}),
+		...(attachment.liveCardFingerprint ? { liveCardFingerprint: attachment.liveCardFingerprint } : {}),
+		...(attachment.pendingActions
+			? { pendingActions: attachment.pendingActions.map(action => ({ ...action })) }
+			: {}),
 	};
 }
 
@@ -114,6 +158,7 @@ function parseState(text: string): RpcAttachmentStoreState {
 export class RpcAttachmentStore {
 	readonly #filePath: string;
 	#state: RpcAttachmentStoreState;
+	#persistQueue: Promise<void> = Promise.resolve();
 
 	private constructor(filePath: string, state: RpcAttachmentStoreState) {
 		this.#filePath = filePath;
@@ -160,8 +205,14 @@ export class RpcAttachmentStore {
 	}
 
 	private async persist(): Promise<void> {
+		const next = this.#persistQueue.then(() => this.writeSnapshot());
+		this.#persistQueue = next.catch(() => undefined);
+		await next;
+	}
+
+	private async writeSnapshot(): Promise<void> {
 		await mkdir(dirname(this.#filePath), { recursive: true });
-		const tmpPath = `${this.#filePath}.tmp`;
+		const tmpPath = `${this.#filePath}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
 		await writeFile(tmpPath, `${JSON.stringify(this.snapshotState())}\n`, "utf8");
 		await rename(tmpPath, this.#filePath);
 	}

@@ -113,6 +113,22 @@ export interface RpcLivenessState {
 	timeoutMs: number;
 }
 
+export type PendingActionType = "workflow_gate" | "ui_select" | "ui_confirm" | "ui_text" | "ui_editor";
+export type PendingActionStatus = "pending" | "answered" | "cancelled" | "expired" | "rejected";
+
+export interface PendingActionSummary {
+	type: PendingActionType;
+	requestIdHash?: string;
+	gateIdHash?: string;
+	dedupeKey: string;
+	label: string;
+	createdAt: number;
+	expiresAt: number;
+	deliveredMessageId?: string | number;
+	status: PendingActionStatus;
+	optionHashes?: string[];
+}
+
 export interface AttachmentRecord {
 	chatId: string;
 	userId: string | null;
@@ -124,6 +140,10 @@ export interface AttachmentRecord {
 	deliveryIdentities: RpcDeliveryIdentity[];
 	chunkProgress?: RpcChunkProgress;
 	updatedAt: number;
+	liveCardMessageId?: string | number;
+	liveCardUpdatedAt?: number;
+	liveCardFingerprint?: string;
+	pendingActions?: PendingActionSummary[];
 }
 
 export interface RpcBackendState {
@@ -182,6 +202,13 @@ export interface ChatReply {
 	replyMarkup?: TelegramInlineKeyboardMarkup;
 	edit?: { messageId: string | number };
 	callbackAnswer?: CallbackAnswer;
+	onDelivered?: (result: TelegramSendResult) => void | Promise<void>;
+}
+
+export interface TelegramSendResult {
+	ok: boolean;
+	retryAfterMs?: number;
+	messageId?: string | number;
 }
 
 /**
@@ -301,5 +328,5 @@ export interface TelegramTransport {
 	/** Stop the receive loop. */
 	stop(): void;
 	/** Optional outbound send port for notifier-driven messages. */
-	send?(message: { chatId: string; reply: ChatReply }): Promise<{ ok: boolean; retryAfterMs?: number }>;
+	send?(message: { chatId: string; reply: ChatReply }): Promise<TelegramSendResult>;
 }

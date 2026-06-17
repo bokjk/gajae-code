@@ -1,4 +1,5 @@
 import type {
+	ChatReply,
 	CoordinationStatus,
 	CoordinatorClient,
 	GatewayPreset,
@@ -8,6 +9,7 @@ import type {
 	OutgoingReply,
 	ReportStatusResult,
 	StartSessionResult,
+	TelegramSendResult,
 	TelegramTransport,
 	WatchEventsInput,
 	WatchEventsResult,
@@ -66,8 +68,11 @@ export function replyText(reply: OutgoingReply | string): string {
 /** Drives a scripted list of inbound updates through the gateway and records replies. */
 export class FakeTransport implements TelegramTransport {
 	sent: Array<{ chatId: string | null; reply: OutgoingReply | string; text: string }> = [];
-	outbound: Array<{ chatId: string; reply: import("../src/types").ChatReply }> = [];
-	sendScript: Array<{ ok: boolean; retryAfterMs?: number }> = [];
+	outbound: Array<{ chatId: string; reply: ChatReply }> = [];
+
+	sendScript: TelegramSendResult[] = [];
+	messageId = 1;
+
 	constructor(private readonly inbox: IncomingUpdate[]) {}
 
 	async run(onUpdate: (update: IncomingUpdate) => Promise<OutgoingReply | string>): Promise<void> {
@@ -77,12 +82,11 @@ export class FakeTransport implements TelegramTransport {
 		}
 	}
 
-	async send(message: {
-		chatId: string;
-		reply: import("../src/types").ChatReply;
-	}): Promise<{ ok: boolean; retryAfterMs?: number }> {
+	async send(message: { chatId: string; reply: ChatReply }): Promise<TelegramSendResult> {
 		this.outbound.push(message);
-		return this.sendScript.shift() ?? { ok: true };
+		const result = this.sendScript.shift() ?? { ok: true, messageId: this.messageId++ };
+		await message.reply.onDelivered?.(result);
+		return result;
 	}
 
 	stop(): void {}

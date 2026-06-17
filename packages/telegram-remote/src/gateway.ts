@@ -282,6 +282,11 @@ export class TelegramRemoteGateway {
 			case "steer_held":
 			case "cancel_steer":
 			case "abort":
+			case "live_refresh":
+			case "live_status":
+			case "live_help":
+			case "live_detach":
+			case "dismiss_card":
 				return this.answerOnly(MESSAGES.callbackInvalid);
 		}
 	}

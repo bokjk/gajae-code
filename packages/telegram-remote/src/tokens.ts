@@ -21,7 +21,19 @@ export type SessionCallbackAction =
 	| "cancel";
 export type ListCallbackAction = "sessions_page" | "sessions_filter";
 export type PresetCallbackAction = "preset_start";
-export type RpcCallbackAction = "ui_select" | "ui_confirm" | "gate_answer" | "steer_held" | "cancel_steer" | "abort";
+export type RpcCallbackAction =
+	| "ui_select"
+	| "ui_confirm"
+	| "gate_answer"
+	| "steer_held"
+	| "cancel_steer"
+	| "abort"
+	| "live_refresh"
+	| "live_status"
+	| "live_help"
+	| "live_detach"
+	| "dismiss_card";
+
 export type CallbackAction = SessionCallbackAction | ListCallbackAction | PresetCallbackAction | RpcCallbackAction;
 
 export interface BaseCallbackTokenRecord {
@@ -59,17 +71,39 @@ export interface PresetCallbackPayload {
 	presetId: string;
 }
 
+export interface RpcLiveRefreshPayload {
+	action: "live_refresh";
+}
+
+export interface RpcLiveStatusPayload {
+	action: "live_status";
+}
+
+export interface RpcLiveHelpPayload {
+	action: "live_help";
+}
+
+export interface RpcLiveDetachPayload {
+	action: "live_detach";
+}
+
+export interface RpcDismissCardPayload {
+	action: "dismiss_card";
+}
+
 export interface RpcUiSelectPayload {
 	action: "ui_select";
 	requestId: string;
 	optionIndex: number;
 	value: string;
+	dedupeKey?: string;
 }
 
 export interface RpcUiConfirmPayload {
 	action: "ui_confirm";
 	requestId: string;
 	confirmed: boolean;
+	dedupeKey?: string;
 }
 
 export interface RpcGateAnswerPayload {
@@ -78,6 +112,7 @@ export interface RpcGateAnswerPayload {
 	optionIndex: number;
 	answer: unknown;
 	idempotencyKey: string;
+	dedupeKey?: string;
 }
 
 export interface RpcSteerHeldPayload {
@@ -99,6 +134,11 @@ export type CallbackTokenRecord = BaseCallbackTokenRecord &
 		| SessionCallbackPayload
 		| ListCallbackPayload
 		| PresetCallbackPayload
+		| RpcLiveRefreshPayload
+		| RpcLiveStatusPayload
+		| RpcLiveHelpPayload
+		| RpcLiveDetachPayload
+		| RpcDismissCardPayload
 		| RpcUiSelectPayload
 		| RpcUiConfirmPayload
 		| RpcGateAnswerPayload
@@ -140,6 +180,11 @@ export class CallbackTokenStore {
 				| SessionCallbackPayload
 				| ListCallbackPayload
 				| PresetCallbackPayload
+				| RpcLiveRefreshPayload
+				| RpcLiveStatusPayload
+				| RpcLiveHelpPayload
+				| RpcLiveDetachPayload
+				| RpcDismissCardPayload
 				| RpcUiSelectPayload
 				| RpcUiConfirmPayload
 				| RpcGateAnswerPayload

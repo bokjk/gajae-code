@@ -16,6 +16,9 @@ import { TelegramRemoteNotifier } from "../src/notifier";
 import { RpcAttachmentStore } from "../src/rpc-attachment-store";
 import { FakeRpcBackend } from "../src/rpc-backend";
 import { TelegramRpcGateway } from "../src/rpc-gateway";
+
+import { RPC_SENTINELS } from "../src/rpc-safe-projection";
+
 import { SubscriptionStore } from "../src/subscriptions";
 import type {
 	ChatReply,
@@ -27,6 +30,7 @@ import type {
 	ReportStatusResult,
 	StartSessionResult,
 	TelegramInlineKeyboardButton,
+	TelegramSendResult,
 	WatchEventsInput,
 	WatchEventsResult,
 } from "../src/types";
@@ -47,7 +51,7 @@ const HOSTILE_STATUS: CoordinationStatus = {
 	turns: [{ session_id: "sess-1", status: "active", turn_id: "turn-1", prompt: { text: "PROMPT_LEAK" } }],
 };
 
-const FORBIDDEN = ["SECRET_TAIL", "sk-LEAK", "TRANSCRIPT_LEAK", "PROMPT_LEAK", "/secret/abs/path"];
+const FORBIDDEN = ["SECRET_TAIL", "sk-LEAK", "TRANSCRIPT_LEAK", "PROMPT_LEAK", "/secret/abs/path", ...RPC_SENTINELS];
 
 // Long, punctuation-heavy raw coordinator id that must survive unchanged through
 // tokens/coordinator calls but never appear in callback_data or chat text.
@@ -284,7 +288,8 @@ function rpcGateway(deps: {
 	backend: FakeRpcBackend;
 	store: RpcAttachmentStore;
 	sends: RpcSend[];
-	send?: (message: RpcSend) => Promise<{ ok: boolean; retryAfterMs?: number }>;
+	send?: (message: RpcSend) => Promise<TelegramSendResult>;
+
 	now?: () => number;
 }): TelegramRpcGateway {
 	return new TelegramRpcGateway(
@@ -302,7 +307,9 @@ function rpcGateway(deps: {
 					deps.send ??
 					(async message => {
 						deps.sends.push(message);
-						return { ok: true };
+						const result = { ok: true, messageId: deps.sends.length } satisfies TelegramSendResult;
+						await message.reply.onDelivered?.(result);
+						return result;
 					}),
 			},
 			now: deps.now ?? (() => 1_000_000),
@@ -376,7 +383,22 @@ async function rpcInvariants(): Promise<void> {
 		);
 		assert(intruderBackend.calls.length === 0, "intruder triggered zero backend operations");
 
-		await gateway.handleUpdate(msg("100", "/attach"));
+		const attachReply = asChat(await gateway.handleUpdate(msg("100", "/attach")));
+		assert(attachReply.text.includes("<b>GJC remote</b>"), "RPC attach renders live card");
+		assert(attachReply.text.includes("State: Attached"), "RPC live card shows safe state");
+		assert(attachReply.text.includes("Next:"), "RPC live card shows next action");
+		assertNoForbiddenLeak(attachReply.text, "RPC attach live card");
+		for (const button of buttons(attachReply)) {
+			assert(button.callbackData.startsWith("gtr:v1:"), "live-card callback_data is opaque token");
+			assert(Buffer.byteLength(button.callbackData, "utf8") <= 64, "live-card callback_data <=64 bytes");
+			assertNoForbiddenLeak(button.callbackData, "live-card callback_data");
+		}
+		await attachReply.onDelivered?.({ ok: true, messageId: 101 });
+		assert(store.get()?.liveCardMessageId === 101, "live-card message id persisted");
+		const statusReply = asChat(await gateway.handleUpdate(msg("100", "/status")));
+		assert(statusReply.edit?.messageId === 101, "status edits persisted live-card id");
+		assertNoForbiddenLeak(statusReply.text, "RPC status live card");
+
 		const hostileGate: WorkflowGate = {
 			type: "workflow_gate",
 			gate_id: "HOSTILE<&>ID",
@@ -384,7 +406,12 @@ async function rpcInvariants(): Promise<void> {
 			kind: "approval",
 			schema: { type: "string" },
 			schema_hash: "hash",
-			context: { title: "HOSTILE<&>ID", prompt: "Approve HOSTILE<&>ID?" },
+			context: {
+				title: "Approve safe action",
+				prompt: `Approve ${RPC_SENTINELS[0]} ${RPC_SENTINELS[4]}?`,
+				summary: RPC_SENTINELS[3],
+				stage_state: { raw: RPC_SENTINELS[10] },
+			},
 			options: [{ label: "Approve HOSTILE<&>ID", value: "HOSTILE<&>ID" }],
 			created_at: "2026-06-16T00:00:00Z",
 			required: true,
@@ -393,10 +420,13 @@ async function rpcInvariants(): Promise<void> {
 		await flushRpc();
 		const gateSend = sends.find(send => send.reply.replyMarkup?.inline_keyboard.flat().length);
 		assert(!!gateSend, "workflow gate rendered a button");
+		assertNoForbiddenLeak(gateSend!.reply.text, "RPC gate card");
+
 		for (const button of gateSend!.reply.replyMarkup!.inline_keyboard.flat()) {
 			assert(button.callbackData.startsWith("gtr:v1:"), "RPC callback_data is opaque token");
 			assert(Buffer.byteLength(button.callbackData, "utf8") <= 64, "RPC callback_data <=64 bytes");
 			assert(!button.callbackData.includes("HOSTILE<&>ID"), "RPC callback_data excludes hostile id");
+			assertNoForbiddenLeak(button.callbackData, "RPC gate callback_data");
 		}
 
 		const beforeFinal = sends.length;

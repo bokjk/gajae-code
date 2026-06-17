@@ -12,7 +12,7 @@ WorkingDirectory=%h/src/gajae-code
 Environment=PATH=%h/.bun/bin:%h/.local/bin:/usr/local/bin:/usr/bin:/bin
 RuntimeDirectory=gjc
 RuntimeDirectoryMode=0700
-ExecStart=/usr/bin/env gjc launch --output rpc --listen %t/gjc/telegram-remote.sock
+ExecStart=/usr/bin/env gjc launch --mode rpc --listen %t/gjc/telegram-remote.sock
 Restart=on-failure
 RestartSec=10s
 NoNewPrivileges=true

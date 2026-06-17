@@ -5,14 +5,12 @@ import type {
 	RpcWorkflowGate,
 	RpcWorkflowGateOption,
 } from "@gajae-code/coding-agent/modes/rpc/rpc-types";
-import { escapeHtml } from "./projection";
+import { projectExtensionUiRequest, projectWorkflowGate, safeRpcLine } from "./rpc-safe-projection";
 import type { CallbackTokenStore } from "./tokens";
-import type { ChatReply, RpcBackendPort, TelegramInlineKeyboardButton } from "./types";
+import type { ChatReply, PendingActionSummary, RpcBackendPort, TelegramInlineKeyboardButton } from "./types";
 
 const DEFAULT_TTL_MS = 5 * 60 * 1000;
 const TEXT_MAX_LEN = 4000;
-const TITLE_MAX_LEN = 160;
-const OPTION_MAX_LEN = 48;
 
 export interface RpcUiBridgeBinding {
 	chatId: string;
@@ -26,6 +24,9 @@ export interface RpcUiBridgeOptions {
 	now?: () => number;
 	ttlMs?: number;
 	onMessage?: (reply: ChatReply) => void | Promise<void>;
+	onPendingAction?: (summary: PendingActionSummary) => void | Promise<void>;
+	onClearPendingAction?: (dedupeKey: string) => void | Promise<void>;
+	isPendingActionActive?: (dedupeKey: string) => boolean;
 }
 
 interface PendingTextResponse {
@@ -34,6 +35,7 @@ interface PendingTextResponse {
 	userId: string | null;
 	expiresAt: number;
 	method: "input" | "editor";
+	dedupeKey: string;
 }
 
 export class RpcUiBridge {
@@ -43,6 +45,9 @@ export class RpcUiBridge {
 	readonly #now: () => number;
 	readonly #ttlMs: number;
 	readonly #onMessage?: (reply: ChatReply) => void | Promise<void>;
+	readonly #onPendingAction?: (summary: PendingActionSummary) => void | Promise<void>;
+	readonly #onClearPendingAction?: (dedupeKey: string) => void | Promise<void>;
+	readonly #isPendingActionActive?: (dedupeKey: string) => boolean;
 	readonly #pendingText = new Map<string, PendingTextResponse>();
 	#unsubscribeUi: (() => void) | null = null;
 	#unsubscribeGate: (() => void) | null = null;
@@ -54,6 +59,9 @@ export class RpcUiBridge {
 		this.#now = options.now ?? Date.now;
 		this.#ttlMs = options.ttlMs ?? DEFAULT_TTL_MS;
 		this.#onMessage = options.onMessage;
+		this.#onPendingAction = options.onPendingAction;
+		this.#onClearPendingAction = options.onClearPendingAction;
+		this.#isPendingActionActive = options.isPendingActionActive;
 	}
 
 	start(): void {
@@ -72,6 +80,7 @@ export class RpcUiBridge {
 		this.#unsubscribeGate?.();
 		this.#unsubscribeUi = null;
 		this.#unsubscribeGate = null;
+		for (const pending of this.#pendingText.values()) void this.#onClearPendingAction?.(pending.dedupeKey);
 		this.#pendingText.clear();
 	}
 
@@ -83,18 +92,21 @@ export class RpcUiBridge {
 	async handleExtensionUiRequest(request: RpcExtensionUIRequest): Promise<ChatReply | null> {
 		switch (request.method) {
 			case "select":
-				return this.#emit(this.#renderSelect(request));
+				return this.#renderSelect(request);
 			case "confirm":
-				return this.#emit(this.#renderConfirm(request));
+				return this.#renderConfirm(request);
 			case "input":
 			case "editor":
-				return this.#emit(this.#renderTextPrompt(request));
+				return this.#renderTextPrompt(request);
 			case "open_url":
 				this.#backend.respondExtensionUi?.({ type: "extension_ui_response", id: request.id, cancelled: true });
 				return null;
-			case "cancel":
+			case "cancel": {
+				const pending = this.#pendingText.get(request.targetId);
 				this.#pendingText.delete(request.targetId);
+				if (pending) void this.#onClearPendingAction?.(pending.dedupeKey);
 				return null;
+			}
 			case "notify":
 			case "setStatus":
 			case "setWidget":
@@ -105,12 +117,14 @@ export class RpcUiBridge {
 	}
 
 	async renderWorkflowGate(gate: RpcWorkflowGate): Promise<ChatReply> {
-		const options = gate.options && gate.options.length > 0 ? gate.options : defaultGateOptions(gate);
-		const rows = options.map((option, index) => [this.#gateButton(gate, option, index)]);
-		return this.#emit({
+		const projected = projectWorkflowGate(gate, this.#now(), this.#ttlMs);
+		const rows = projected.options.map(row => [
+			this.#gateButton(gate, row.option, row.optionIndex, row.label, projected.summary.dedupeKey),
+		]);
+		return this.#emitAction(projected.summary, {
 			kind: "chat",
 			parseMode: "HTML",
-			text: `<b>${escapeHtml(gate.kind)}</b>: ${escapeHtml(sanitizeLine(gate.context.prompt ?? gate.context.title ?? gate.gate_id, TITLE_MAX_LEN))}`,
+			text: projected.text,
 			replyMarkup: { inline_keyboard: rows },
 		});
 	}
@@ -121,6 +135,7 @@ export class RpcUiBridge {
 			if (pending.userId !== null && pending.userId !== input.userId) continue;
 			if (this.#now() >= pending.expiresAt) {
 				this.#pendingText.delete(requestId);
+				void this.#onClearPendingAction?.(pending.dedupeKey);
 				continue;
 			}
 			// RpcClient.respondExtensionUi only writes an extension_ui_response frame; input/editor has no
@@ -136,68 +151,88 @@ export class RpcUiBridge {
 				return "failed";
 			}
 			this.#pendingText.delete(requestId);
+			void this.#onClearPendingAction?.(pending.dedupeKey);
 			return "sent";
 		}
 		return null;
 	}
 
-	#renderSelect(request: Extract<RpcExtensionUIRequest, { method: "select" }>): ChatReply {
+	async #renderSelect(request: Extract<RpcExtensionUIRequest, { method: "select" }>): Promise<ChatReply> {
+		const projected = projectExtensionUiRequest(request, this.#now(), this.#ttlMs);
+		if (!projected?.summary) return this.#emit({ kind: "chat", parseMode: "HTML", text: "Choose an option." });
+		const summary = projected.summary;
+
 		const rows = request.options.map((option, index) => [
-			this.#uiButton(sanitizeLine(option, OPTION_MAX_LEN), {
+			this.#uiButton(projected.options?.[index] ?? safeRpcLine(option, 48, `Option ${index + 1}`), {
 				action: "ui_select",
 				requestId: request.id,
 				value: option,
 				optionIndex: index,
+				dedupeKey: summary.dedupeKey,
 			}),
 		]);
-		return {
+		return this.#emitAction(summary, {
 			kind: "chat",
 			parseMode: "HTML",
-			text: `<b>${escapeHtml(sanitizeLine(request.title, TITLE_MAX_LEN))}</b>`,
+			text: projected.text,
 			replyMarkup: { inline_keyboard: rows },
-		};
+		});
 	}
 
-	#renderConfirm(request: Extract<RpcExtensionUIRequest, { method: "confirm" }>): ChatReply {
-		return {
+	async #renderConfirm(request: Extract<RpcExtensionUIRequest, { method: "confirm" }>): Promise<ChatReply> {
+		const projected = projectExtensionUiRequest(request, this.#now(), this.#ttlMs);
+		if (!projected?.summary) return this.#emit({ kind: "chat", parseMode: "HTML", text: "Confirm action." });
+		return this.#emitAction(projected.summary, {
 			kind: "chat",
 			parseMode: "HTML",
-			text: `<b>${escapeHtml(sanitizeLine(request.title, TITLE_MAX_LEN))}</b>\n${escapeHtml(sanitizeLine(request.message, TEXT_MAX_LEN))}`,
+			text: projected.text,
 			replyMarkup: {
 				inline_keyboard: [
 					[
-						this.#uiButton("Yes", { action: "ui_confirm", requestId: request.id, confirmed: true }),
-						this.#uiButton("No", { action: "ui_confirm", requestId: request.id, confirmed: false }),
+						this.#uiButton("Yes", {
+							action: "ui_confirm",
+							requestId: request.id,
+							confirmed: true,
+							dedupeKey: projected.summary.dedupeKey,
+						}),
+						this.#uiButton("No", {
+							action: "ui_confirm",
+							requestId: request.id,
+							confirmed: false,
+							dedupeKey: projected.summary.dedupeKey,
+						}),
 					],
 				],
 			},
-		};
+		});
 	}
 
-	#renderTextPrompt(request: Extract<RpcExtensionUIRequest, { method: "input" | "editor" }>): ChatReply {
+	async #renderTextPrompt(
+		request: Extract<RpcExtensionUIRequest, { method: "input" | "editor" }>,
+	): Promise<ChatReply> {
+		const projected = projectExtensionUiRequest(request, this.#now(), this.#ttlMs);
+		if (!projected?.summary)
+			return this.#emit({ kind: "chat", parseMode: "HTML", text: "Send the answer as the next message." });
 		this.#pendingText.set(request.id, {
 			requestId: request.id,
 			chatId: this.#binding.chatId,
 			userId: this.#binding.userId,
-			expiresAt: this.#now() + this.#ttlMs,
+			expiresAt: projected.summary.expiresAt,
 			method: request.method,
+			dedupeKey: projected.summary.dedupeKey,
 		});
-		const hint =
-			request.method === "editor"
-				? "Send the replacement text as the next message."
-				: "Send the answer as the next message.";
-		return {
+		return this.#emitAction(projected.summary, {
 			kind: "chat",
 			parseMode: "HTML",
-			text: `<b>${escapeHtml(sanitizeLine(request.title, TITLE_MAX_LEN))}</b>\n${hint}`,
-		};
+			text: projected.text,
+		});
 	}
 
 	#uiButton(
 		text: string,
 		payload:
-			| { action: "ui_select"; requestId: string; value: string; optionIndex: number }
-			| { action: "ui_confirm"; requestId: string; confirmed: boolean },
+			| { action: "ui_select"; requestId: string; value: string; optionIndex: number; dedupeKey: string }
+			| { action: "ui_confirm"; requestId: string; confirmed: boolean; dedupeKey: string },
 	): TelegramInlineKeyboardButton {
 		return {
 			text,
@@ -214,11 +249,13 @@ export class RpcUiBridge {
 		gate: RpcWorkflowGate,
 		option: RpcWorkflowGateOption,
 		optionIndex: number,
+		label: string,
+		dedupeKey: string,
 	): TelegramInlineKeyboardButton {
 		const answer = option.value ?? option.label;
 		const actionKey = `gate_answer:${gate.gate_id}:${optionIndex}:${hashValue(answer)}`;
 		return {
-			text: sanitizeLine(option.label ?? `Option ${optionIndex + 1}`, OPTION_MAX_LEN),
+			text: label,
 			callbackData: this.#tokens.issue({
 				action: "gate_answer",
 				gateId: gate.gate_id,
@@ -228,6 +265,7 @@ export class RpcUiBridge {
 				chatId: this.#binding.chatId,
 				userId: this.#binding.userId,
 				ttlMs: this.#ttlMs,
+				dedupeKey,
 			}),
 		};
 	}
@@ -235,6 +273,21 @@ export class RpcUiBridge {
 	async #emit(reply: ChatReply): Promise<ChatReply> {
 		await this.#onMessage?.(reply);
 		return reply;
+	}
+
+	async #emitAction(summary: PendingActionSummary, reply: ChatReply): Promise<ChatReply> {
+		const alreadyActive = this.#isPendingActionActive?.(summary.dedupeKey) === true;
+		void this.#onPendingAction?.(summary);
+		const nextReply: ChatReply = {
+			...reply,
+			onDelivered: result => {
+				if (result.ok && result.messageId !== undefined) {
+					void this.#onPendingAction?.({ ...summary, deliveredMessageId: result.messageId });
+				}
+			},
+		};
+		if (!alreadyActive) await this.#onMessage?.(nextReply);
+		return nextReply;
 	}
 }
 
@@ -252,26 +305,6 @@ export function extensionUiResponseFromToken(
 
 export function deriveGateIdempotencyKey(input: { chatId: string; gateId: string; actionKey: string }): string {
 	return `tg:${createHash("sha256").update(`${input.chatId}\0${input.gateId}\0${input.actionKey}`).digest("base64url").slice(0, 32)}`;
-}
-
-function defaultGateOptions(gate: RpcWorkflowGate): RpcWorkflowGateOption[] {
-	if (gate.kind === "approval") {
-		return [
-			{ label: "Approve", value: "approve" },
-			{ label: "Reject", value: "reject" },
-		];
-	}
-	return [{ label: "Continue", value: true }];
-}
-
-function sanitizeLine(value: string, maxLen: number): string {
-	return (
-		value
-			.replace(/[\u0000-\u001f\u007f]/g, " ")
-			.replace(/\s+/g, " ")
-			.trim()
-			.slice(0, maxLen) || "Action required"
-	);
 }
 
 function sanitizeValue(value: string, maxLen: number): string {
