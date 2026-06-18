@@ -298,6 +298,61 @@ describe("normalizeAnthropicToolRootInputSchema", () => {
 		expect(properties.action.enum).toEqual(actions.map(({ action }) => action));
 		expect(out.description).toContain("branch-required fields: action, x, y, to_x, to_y");
 	});
+
+	it("flattens nested root combinators from nullable discriminated unions", () => {
+		const leafActions = [
+			{ action: "screenshot", required: ["action"] },
+			{ action: "click", required: ["action", "x", "y"] },
+		];
+		const out = normalizeAnthropicToolRootInputSchema(
+			normalizeAnthropicToolSchema({
+				anyOf: [
+					{
+						oneOf: leafActions.map(({ action, required }) => ({
+							type: "object",
+							properties: {
+								action: { const: action },
+								x: { type: "number" },
+								y: { type: "number" },
+							},
+							required,
+							additionalProperties: false,
+						})),
+					},
+					{
+						type: "object",
+						properties: {
+							action: { const: "batch" },
+							actions: {
+								type: "array",
+								items: {
+									oneOf: leafActions.map(({ action }) => ({
+										type: "object",
+										properties: { action: { const: action } },
+									})),
+								},
+							},
+						},
+						required: ["action", "actions"],
+						additionalProperties: false,
+					},
+				],
+				properties: {},
+				required: [],
+				type: "object",
+				additionalProperties: false,
+			}) as Record<string, unknown>,
+		);
+
+		expect(out).not.toHaveProperty("anyOf");
+		expect(out).not.toHaveProperty("oneOf");
+		expect(out.required).toEqual(["action"]);
+		const properties = out.properties as Record<string, Record<string, unknown>>;
+		expect(properties.action.enum).toEqual(["screenshot", "click", "batch"]);
+		expect(properties.actions).toHaveProperty("items");
+		expect(JSON.stringify(properties.actions)).toContain("oneOf");
+		expect(out.description).toContain("branch-required fields: action, actions");
+	});
 });
 
 /**

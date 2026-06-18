@@ -2598,6 +2598,25 @@ function describeAnthropicRootBranch(index: number, branch: Record<string, unkno
 	if (typeof branch.description === "string" && branch.description.length > 0) parts.push(branch.description);
 	return parts.join("; ");
 }
+function collectAnthropicRootObjectBranches(schema: unknown): Record<string, unknown>[] | undefined {
+	if (!isRecord(schema)) return undefined;
+	if (isJsonSchemaObjectNode(schema)) return [schema];
+
+	const combinatorKeys = COMBINATOR_KEYS.filter(key => Array.isArray(schema[key]));
+	if (combinatorKeys.length === 0) return undefined;
+
+	const branches: Record<string, unknown>[] = [];
+	for (const key of combinatorKeys) {
+		const variants = schema[key];
+		if (!Array.isArray(variants) || variants.length === 0) return undefined;
+		for (const variant of variants) {
+			const nestedBranches = collectAnthropicRootObjectBranches(variant);
+			if (nestedBranches === undefined) return undefined;
+			branches.push(...nestedBranches);
+		}
+	}
+	return branches;
+}
 
 /**
  * Anthropic rejects tool `input_schema` roots containing top-level oneOf/anyOf/allOf.
@@ -2610,31 +2629,22 @@ export function normalizeAnthropicToolRootInputSchema(schema: Record<string, unk
 	if (rootCombinators.length === 0) return result;
 
 	const baseProperties = isRecord(result.properties) ? { ...result.properties } : {};
-	const flattenKey = rootCombinators.find(key => {
-		const variants = result[key];
-		return (
-			Array.isArray(variants) &&
-			variants.length > 0 &&
-			variants.every(variant => isRecord(variant) && isJsonSchemaObjectNode(variant))
-		);
-	});
+	const flattenedBranches = rootCombinators
+		.map(key => ({ key, branches: collectAnthropicRootObjectBranches({ [key]: result[key] }) }))
+		.find(entry => entry.branches !== undefined && entry.branches.length > 0);
 
 	result.type = "object";
 	result.properties = baseProperties;
 	result.additionalProperties = result.additionalProperties === undefined ? false : result.additionalProperties;
 
-	if (flattenKey !== undefined) {
-		const variants = result[flattenKey] as unknown[];
-		const commonRequired = variants.map(variant => getRequiredNames(variant as Record<string, unknown>));
-		const required =
-			commonRequired.length === 0
-				? []
-				: [...commonRequired[0]].filter(name => commonRequired.every(set => set.has(name)));
+	if (flattenedBranches?.branches !== undefined) {
+		const variants = flattenedBranches.branches;
+		const commonRequired = variants.map(variant => getRequiredNames(variant));
+		const required = [...commonRequired[0]].filter(name => commonRequired.every(set => set.has(name)));
 		const actionValues: unknown[] = [];
 		const guidance: string[] = [];
 
-		for (const [index, variant] of variants.entries()) {
-			const branch = variant as Record<string, unknown>;
+		for (const [index, branch] of variants.entries()) {
 			if (isRecord(branch.properties)) {
 				Object.assign(baseProperties, branch.properties);
 				const actionValue = getSingleLiteralValue(branch.properties.action);
@@ -2653,7 +2663,9 @@ export function normalizeAnthropicToolRootInputSchema(schema: Record<string, unk
 		result.required = required;
 		spillToDescription(result, [
 			["rootCombinatorGuidance", guidance],
-			...rootCombinators.filter(key => key !== flattenKey).map(key => [key, result[key]] as [string, unknown]),
+			...rootCombinators
+				.filter(key => key !== flattenedBranches.key)
+				.map(key => [key, result[key]] as [string, unknown]),
 		]);
 	} else {
 		spillToDescription(
