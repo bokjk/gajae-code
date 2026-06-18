@@ -229,6 +229,8 @@ describe("computer tool dispatch", () => {
 		expect(shot.content.some(block => block.type === "image")).toBe(true);
 		const image = shot.content.find(block => block.type === "image");
 		expect(image).toMatchObject({ type: "image", mimeType: "image/png", data: "AQID" });
+		expect(shot.details?.screenshot?.path).toBeTruthy();
+		expect(await fs.stat(shot.details?.screenshot?.path ?? "")).toMatchObject({ size: 3 });
 		expect(calls.map(call => call.method)).toEqual(["screenshot", "doubleClick", "drag", "scroll"]);
 		// Positional native ABI: (expectedEpoch, x, y, ...rest)
 		expect(calls[1].args).toEqual([undefined, 1, 2, "right"]);
@@ -267,6 +269,8 @@ describe("computer tool dispatch", () => {
 		expect(result.content.some(block => block.type === "image")).toBe(true);
 		const image = result.content.find(block => block.type === "image");
 		expect(image).toMatchObject({ type: "image", mimeType: "image/png", data: "AQID" });
+		expect(result.details?.screenshot?.path).toBeTruthy();
+		expect(await fs.stat(result.details?.screenshot?.path ?? "")).toMatchObject({ size: 3 });
 		expect(calls.map(call => call.method)).toEqual(["screenshot", "click", "type"]);
 	});
 
