@@ -225,7 +225,7 @@ import {
 	readVisibleSkillActiveState,
 	syncSkillActiveState,
 } from "../skill-state/active-state";
-import { assertDeepInterviewMutationAllowed } from "../skill-state/deep-interview-mutation-guard";
+import { assertWorkflowMutationAllowed } from "../skill-state/deep-interview-mutation-guard";
 import { invalidateHostMetadata } from "../ssh/connection-manager";
 import { resolveThinkingLevelForModel, toReasoningEffort } from "../thinking";
 import {
@@ -3775,7 +3775,7 @@ export class AgentSession {
 					onUpdate: never,
 					ctx: never,
 				) => {
-					await assertDeepInterviewMutationAllowed({
+					await assertWorkflowMutationAllowed({
 						cwd: this.sessionManager.getCwd(),
 						sessionId: this.sessionManager.getSessionId(),
 						tool: target,

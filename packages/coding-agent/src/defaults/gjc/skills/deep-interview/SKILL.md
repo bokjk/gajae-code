@@ -123,6 +123,8 @@ Deep Interview threshold: <resolvedThresholdPercent> (source: <resolvedThreshold
    - Final specs MUST resolve to `.gjc/specs/deep-interview-{slug}.md` exactly.
    - Write final specs and all ephemeral interview artifacts through the active GJC workflow/state CLI when available.
    - Direct `.gjc/` file edits are forbidden unless an explicit force override is active; do not use `write`, `edit`, or `ast_edit` against `.gjc/specs`, `.gjc/plans`, `.gjc/state`, or other `.gjc/` paths during normal workflow operation.
+   - Preferred: pass the spec markdown **inline** to `gjc deep-interview --write … --spec "<markdown>"` — no scratch file is needed. The CLI is the only sanctioned writer for `.gjc/specs`.
+   - Only if a spec is too large to pass inline, stage it with the `write` tool to a system temp directory (`os.tmpdir()`/`$TMPDIR`, `/tmp`, `/var/tmp`) outside the project tree, then pass that path to `--spec`. The planning phase-boundary block tolerates these neutral temp writes; never stage interview artifacts inside the repo or under `.gjc/`, and do not improvise repo-relative scratch files.
 
 4. **Initialize state** via `gjc state write`:
 
@@ -495,7 +497,7 @@ When ambiguity ≤ threshold (or hard cap / early exit):
    - Apply `language.instruction` when present so user-facing prose in the spec preserves the session language; keep code identifiers, file paths, commands, JSON/settings keys, and quoted source text unchanged.
    - Apply the self-proofread once to newly generated spec prose before persistence, including generated natural-language table cells such as coverage notes, while preserving transcript answers, quoted/source text, code identifiers, file paths, commands, JSON/settings keys, table structure/fixed labels, and `.gjc/specs/deep-interview-{slug}.md` unchanged.
 2. **Write the final spec through the workflow CLI**: persist the artifact at `.gjc/specs/deep-interview-{slug}.md`
-   - Always use this exact final spec path. Do not write temporary working files to the repo root or other ad hoc paths; repos may allowlist `.gjc/` for planning artifacts while protecting product branches.
+   - Always use this exact final spec path. Prefer passing the spec markdown **inline** as the `--spec` value; only when it is too large to pass inline, stage it as a file in a system temp directory (`os.tmpdir()`/`$TMPDIR`, `/tmp`, `/var/tmp`) outside the project tree and pass that path — never write scratch specs to the repo root, the project tree, or `.gjc/`.
    - Use the native deep-interview write command with `--write --stage final --slug {slug} --spec <markdown-or-path> [--json]` for artifact and state persistence; direct `.gjc/` file edits are forbidden unless an explicit force override is active.
    - Persist the final `spec_path` in state when available so downstream skills and resumed sessions can pass the artifact path explicitly.
    - If the user preselected the deliberate ralplan path, use the native deep-interview write command with `--write --stage final --slug {slug} --spec <markdown-or-path> --deliberate [--json]` so the final spec is persisted before deep-interview hands off to ralplan.

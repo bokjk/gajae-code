@@ -7,6 +7,8 @@ import {
 	assertDeepInterviewMutationRawPathsAllowed,
 	DEEP_INTERVIEW_MUTATION_BLOCK_MESSAGE,
 	getDeepInterviewMutationDecision,
+	RALPLAN_MUTATION_BLOCK_MESSAGE,
+	ULTRAGOAL_GOAL_PLANNING_MUTATION_BLOCK_MESSAGE,
 } from "@gajae-code/coding-agent/skill-state/deep-interview-mutation-guard";
 import { ToolError } from "@gajae-code/coding-agent/tools/tool-errors";
 import { logger } from "@gajae-code/utils";
@@ -46,6 +48,30 @@ async function writeActiveDeepInterview(cwd: string, sessionId = "session-a", ph
 	await Bun.write(path.join(sessionDir, "skill-active-state.json"), `${JSON.stringify(activeState, null, 2)}\n`);
 	await Bun.write(
 		path.join(sessionDir, "deep-interview-state.json"),
+		`${JSON.stringify({ active: true, current_phase: phase, session_id: sessionId }, null, 2)}\n`,
+	);
+}
+
+async function writeActiveSkill(
+	cwd: string,
+	skill: "deep-interview" | "ralplan" | "ultragoal" | "team",
+	phase: string,
+	sessionId = "session-a",
+): Promise<void> {
+	const now = new Date().toISOString();
+	const sessionDir = path.join(cwd, ".gjc", "state", "sessions", encodePathSegment(sessionId));
+	await fs.mkdir(sessionDir, { recursive: true });
+	const activeState = {
+		version: 1,
+		active: true,
+		skill,
+		phase,
+		updated_at: now,
+		active_skills: [{ skill, phase, active: true, updated_at: now, session_id: sessionId }],
+	};
+	await Bun.write(path.join(sessionDir, "skill-active-state.json"), `${JSON.stringify(activeState, null, 2)}\n`);
+	await Bun.write(
+		path.join(sessionDir, `${skill}-state.json`),
 		`${JSON.stringify({ active: true, current_phase: phase, session_id: sessionId }, null, 2)}\n`,
 	);
 }
@@ -159,17 +185,24 @@ describe("deep-interview mutation guard", () => {
 		}
 	});
 
-	it("blocks all write targets during active deep-interview, including non-.gjc paths", async () => {
+	it("allows neutral temp scratch but blocks in-project / non-temp writes during active deep-interview", async () => {
 		const cwd = await makeTempRoot();
 		await writeActiveDeepInterview(cwd);
 
-		for (const rawPath of [
-			"../outside.md",
-			path.join(os.tmpdir(), "outside-gjc-plan.md"),
-			"agent://123",
-			"product/archive.zip:product.ts",
-			"data.sqlite:rows:1",
-		]) {
+		// Neutral temp scratch outside the project tree stays writable so specs can be
+		// staged and fed to `gjc deep-interview --write --spec <path>`.
+		for (const rawPath of [path.join(os.tmpdir(), "deep-interview-scratch.md"), "/tmp/deep-interview-scratch.md"]) {
+			const decision = await getDeepInterviewMutationDecision({
+				cwd,
+				sessionId: "session-a",
+				tool: tool("write"),
+				args: { path: rawPath, content: "x" },
+			});
+			expect(decision.blocked).toBe(false);
+		}
+
+		// In-project and unresolvable targets remain blocked at the phase boundary.
+		for (const rawPath of ["agent://123", "product/archive.zip:product.ts", "data.sqlite:rows:1", "src/product.ts"]) {
 			const decision = await getDeepInterviewMutationDecision({
 				cwd,
 				sessionId: "session-a",
@@ -340,5 +373,355 @@ describe("deep-interview mutation guard", () => {
 				forceOverride: true,
 			}),
 		).resolves.toBeUndefined();
+	});
+
+	it("blocks product mutation during active ralplan and allows neutral temp scratch", async () => {
+		const cwd = await makeTempRoot();
+		await writeActiveSkill(cwd, "ralplan", "planner");
+
+		const blocked = await getDeepInterviewMutationDecision({
+			cwd,
+			sessionId: "session-a",
+			tool: tool("write"),
+			args: { path: "src/product.ts", content: "x" },
+		});
+		expect(blocked.blocked).toBe(true);
+		expect(blocked.reason).toBe("phase-boundary");
+		expect(blocked.message).toBe(RALPLAN_MUTATION_BLOCK_MESSAGE);
+
+		const temp = await getDeepInterviewMutationDecision({
+			cwd,
+			sessionId: "session-a",
+			tool: tool("write"),
+			args: { path: "/tmp/ralplan-scratch.md", content: "x" },
+		});
+		expect(temp.blocked).toBe(false);
+
+		const gjcBash = await getDeepInterviewMutationDecision({
+			cwd,
+			sessionId: "session-a",
+			tool: tool("bash"),
+			args: { command: "gjc ralplan --write --stage planner --stage_n 1 --artifact /tmp/plan.md" },
+		});
+		expect(gjcBash.blocked).toBe(false);
+	});
+
+	it("blocks product mutation only during the ultragoal goal-planning phase", async () => {
+		const cwd = await makeTempRoot();
+		await writeActiveSkill(cwd, "ultragoal", "goal-planning");
+
+		const planning = await getDeepInterviewMutationDecision({
+			cwd,
+			sessionId: "session-a",
+			tool: tool("write"),
+			args: { path: "src/product.ts", content: "x" },
+		});
+		expect(planning.blocked).toBe(true);
+		expect(planning.reason).toBe("phase-boundary");
+		expect(planning.message).toBe(ULTRAGOAL_GOAL_PLANNING_MUTATION_BLOCK_MESSAGE);
+
+		await writeActiveSkill(cwd, "ultragoal", "active");
+		const executing = await getDeepInterviewMutationDecision({
+			cwd,
+			sessionId: "session-a",
+			tool: tool("write"),
+			args: { path: "src/product.ts", content: "x" },
+		});
+		expect(executing.blocked).toBe(false);
+	});
+
+	it("does not block product mutation while team is active", async () => {
+		const cwd = await makeTempRoot();
+		await writeActiveSkill(cwd, "team", "running");
+
+		const decision = await getDeepInterviewMutationDecision({
+			cwd,
+			sessionId: "session-a",
+			tool: tool("write"),
+			args: { path: "src/product.ts", content: "x" },
+		});
+		expect(decision.blocked).toBe(false);
+	});
+
+	it("blocks product-mutating bash during a planning phase (bash parity) but allows temp scratch", async () => {
+		const cwd = await makeTempRoot();
+		await writeActiveDeepInterview(cwd);
+
+		const blockedBash = await getDeepInterviewMutationDecision({
+			cwd,
+			sessionId: "session-a",
+			tool: tool("bash"),
+			args: { command: "tee src/product.ts" },
+		});
+		expect(blockedBash.blocked).toBe(true);
+		expect(blockedBash.reason).toBe("phase-boundary");
+		expect(blockedBash.message).toBe(DEEP_INTERVIEW_MUTATION_BLOCK_MESSAGE);
+
+		const tempBash = await getDeepInterviewMutationDecision({
+			cwd,
+			sessionId: "session-a",
+			tool: tool("bash"),
+			args: { command: "cat draft.md > /tmp/deep-interview-final.md" },
+		});
+		expect(tempBash.blocked).toBe(false);
+	});
+
+	it("treats a heredoc delimiter as a here-doc word, not a path, so heredoc-to-temp is allowed", async () => {
+		const cwd = await makeTempRoot();
+		await writeActiveDeepInterview(cwd);
+
+		const heredocToTemp = await getDeepInterviewMutationDecision({
+			cwd,
+			sessionId: "session-a",
+			tool: tool("bash"),
+			args: { command: "cat <<EOF > /tmp/deep-interview-final.md\nspec body\nEOF" },
+		});
+		expect(heredocToTemp.blocked).toBe(false);
+
+		// The redirect target still governs: a heredoc into product code stays blocked.
+		const heredocToProduct = await getDeepInterviewMutationDecision({
+			cwd,
+			sessionId: "session-a",
+			tool: tool("bash"),
+			args: { command: "cat <<EOF > src/product.ts\nx\nEOF" },
+		});
+		expect(heredocToProduct.blocked).toBe(true);
+	});
+
+	it("keeps blocking ralplan at the pre-approval terminal phases (final, handoff)", async () => {
+		const cwd = await makeTempRoot();
+		for (const phase of ["final", "handoff"]) {
+			await writeActiveSkill(cwd, "ralplan", phase);
+			const decision = await getDeepInterviewMutationDecision({
+				cwd,
+				sessionId: "session-a",
+				tool: tool("write"),
+				args: { path: "src/product.ts", content: "x" },
+			});
+			expect(decision.blocked).toBe(true);
+			expect(decision.message).toBe(RALPLAN_MUTATION_BLOCK_MESSAGE);
+		}
+	});
+
+	it("keeps blocking deep-interview through its handoff phase but releases on complete", async () => {
+		const cwd = await makeTempRoot();
+		await writeActiveSkill(cwd, "deep-interview", "handoff");
+		const handoff = await getDeepInterviewMutationDecision({
+			cwd,
+			sessionId: "session-a",
+			tool: tool("write"),
+			args: { path: "src/product.ts", content: "x" },
+		});
+		expect(handoff.blocked).toBe(true);
+
+		await writeActiveSkill(cwd, "deep-interview", "complete");
+		const complete = await getDeepInterviewMutationDecision({
+			cwd,
+			sessionId: "session-a",
+			tool: tool("write"),
+			args: { path: "src/product.ts", content: "x" },
+		});
+		expect(complete.blocked).toBe(false);
+	});
+
+	it("re-blocks when a planning skill is re-activated after an executor goal completes (skill return)", async () => {
+		const cwd = await makeTempRoot();
+		// ultragoal finished executing -> not blocked.
+		await writeActiveSkill(cwd, "ultragoal", "complete");
+		const afterComplete = await getDeepInterviewMutationDecision({
+			cwd,
+			sessionId: "session-a",
+			tool: tool("write"),
+			args: { path: "src/product.ts", content: "x" },
+		});
+		expect(afterComplete.blocked).toBe(false);
+
+		// Returning to ralplan re-activates the planning posture.
+		await writeActiveSkill(cwd, "ralplan", "planner");
+		const afterReturn = await getDeepInterviewMutationDecision({
+			cwd,
+			sessionId: "session-a",
+			tool: tool("write"),
+			args: { path: "src/product.ts", content: "x" },
+		});
+		expect(afterReturn.blocked).toBe(true);
+		expect(afterReturn.message).toBe(RALPLAN_MUTATION_BLOCK_MESSAGE);
+	});
+
+	it("follows the current skill after a handoff demotes the prior planning skill", async () => {
+		const cwd = await makeTempRoot();
+		const sessionId = "session-a";
+		const now = new Date().toISOString();
+		const sessionDir = path.join(cwd, ".gjc", "state", "sessions", encodePathSegment(sessionId));
+		await fs.mkdir(sessionDir, { recursive: true });
+		// A real handoff demotes the prior planning skill to active:false and promotes the
+		// executor. The demoted deep-interview entry must not keep blocking the executor.
+		await Bun.write(
+			path.join(sessionDir, "skill-active-state.json"),
+			`${JSON.stringify(
+				{
+					version: 1,
+					active: true,
+					skill: "ultragoal",
+					phase: "active",
+					updated_at: now,
+					active_skills: [
+						{ skill: "ultragoal", phase: "active", active: true, updated_at: now, session_id: sessionId },
+						{
+							skill: "deep-interview",
+							phase: "handoff",
+							active: false,
+							updated_at: now,
+							session_id: sessionId,
+							handoff_to: "ultragoal",
+						},
+					],
+				},
+				null,
+				2,
+			)}\n`,
+		);
+		await Bun.write(
+			path.join(sessionDir, "ultragoal-state.json"),
+			`${JSON.stringify({ active: true, current_phase: "active", session_id: sessionId }, null, 2)}\n`,
+		);
+		await Bun.write(
+			path.join(sessionDir, "deep-interview-state.json"),
+			`${JSON.stringify({ active: false, current_phase: "handoff", session_id: sessionId }, null, 2)}\n`,
+		);
+
+		const decision = await getDeepInterviewMutationDecision({
+			cwd,
+			sessionId,
+			tool: tool("write"),
+			args: { path: "src/product.ts", content: "x" },
+		});
+		expect(decision.blocked).toBe(false);
+	});
+
+	it("blocks compound gjc bash that appends a product mutation or .gjc write", async () => {
+		const cwd = await makeTempRoot();
+		await writeActiveSkill(cwd, "ralplan", "planner");
+
+		const compoundProduct = await getDeepInterviewMutationDecision({
+			cwd,
+			sessionId: "session-a",
+			tool: tool("bash"),
+			args: { command: "gjc ralplan --write --stage planner --artifact /tmp/p.md ; tee src/product.ts" },
+		});
+		expect(compoundProduct.blocked).toBe(true);
+
+		const compoundGjc = await getDeepInterviewMutationDecision({
+			cwd,
+			sessionId: "session-a",
+			tool: tool("bash"),
+			args: { command: "gjc state read && echo x > .gjc/state/foo.json" },
+		});
+		expect(compoundGjc.blocked).toBe(true);
+		expect(["gjc-target", "workflow-state-target"]).toContain(compoundGjc.reason ?? "");
+
+		// A newline is a shell command separator too: a second line must not be skipped.
+		const newlineProduct = await getDeepInterviewMutationDecision({
+			cwd,
+			sessionId: "session-a",
+			tool: tool("bash"),
+			args: { command: "gjc ralplan --write --stage planner --artifact /tmp/p.md\ntouch src/product.ts" },
+		});
+		expect(newlineProduct.blocked).toBe(true);
+
+		const newlineGjc = await getDeepInterviewMutationDecision({
+			cwd,
+			sessionId: "session-a",
+			tool: tool("bash"),
+			args: { command: "gjc state read\nrm .gjc/state/foo.json" },
+		});
+		expect(newlineGjc.blocked).toBe(true);
+		expect(["gjc-target", "workflow-state-target"]).toContain(newlineGjc.reason ?? "");
+
+		// A single, unredirected gjc command is still allowed.
+		const plainGjc = await getDeepInterviewMutationDecision({
+			cwd,
+			sessionId: "session-a",
+			tool: tool("bash"),
+			args: { command: "gjc ralplan --write --stage planner --artifact /tmp/p.md" },
+		});
+		expect(plainGjc.blocked).toBe(false);
+	});
+
+	it("selects the most-recently-updated workflow skill when several are momentarily active", async () => {
+		const cwd = await makeTempRoot();
+		const sessionId = "session-a";
+		const sessionDir = path.join(cwd, ".gjc", "state", "sessions", encodePathSegment(sessionId));
+		await fs.mkdir(sessionDir, { recursive: true });
+		const older = new Date(Date.now() - 60_000).toISOString();
+		const newer = new Date().toISOString();
+		// Stale ralplan `final` (older) coexists with a newer ultragoal executor; the
+		// newer executor must win so product mutation is allowed.
+		await Bun.write(
+			path.join(sessionDir, "skill-active-state.json"),
+			`${JSON.stringify(
+				{
+					version: 1,
+					active: true,
+					skill: "ralplan",
+					phase: "final",
+					updated_at: older,
+					active_skills: [
+						{ skill: "ralplan", phase: "final", active: true, updated_at: older, session_id: sessionId },
+						{ skill: "ultragoal", phase: "active", active: true, updated_at: newer, session_id: sessionId },
+					],
+				},
+				null,
+				2,
+			)}\n`,
+		);
+		await Bun.write(
+			path.join(sessionDir, "ralplan-state.json"),
+			`${JSON.stringify({ active: true, current_phase: "final", session_id: sessionId }, null, 2)}\n`,
+		);
+		await Bun.write(
+			path.join(sessionDir, "ultragoal-state.json"),
+			`${JSON.stringify({ active: true, current_phase: "active", session_id: sessionId }, null, 2)}\n`,
+		);
+
+		const decision = await getDeepInterviewMutationDecision({
+			cwd,
+			sessionId,
+			tool: tool("write"),
+			args: { path: "src/product.ts", content: "x" },
+		});
+		expect(decision.blocked).toBe(false);
+	});
+
+	it("blocks a temp symlink whose real target is inside the project tree", async () => {
+		const cwd = await makeTempRoot();
+		await writeActiveDeepInterview(cwd);
+		await fs.mkdir(path.join(cwd, "src"), { recursive: true });
+		const linkDir = await fs.mkdtemp(path.join(os.tmpdir(), "gjc-guard-symlink-"));
+		tempRoots.push(linkDir);
+		const link = path.join(linkDir, "into-repo");
+		await fs.symlink(path.join(cwd, "src"), link);
+
+		const decision = await getDeepInterviewMutationDecision({
+			cwd,
+			sessionId: "session-a",
+			tool: tool("write"),
+			args: { path: path.join(link, "product.ts"), content: "x" },
+		});
+		expect(decision.blocked).toBe(true);
+	});
+
+	it("blocks .gjc raw paths in deferred ast_edit apply even with no planning skill or forceOverride", async () => {
+		const cwd = await makeTempRoot();
+		await expect(
+			assertDeepInterviewMutationRawPathsAllowed({ cwd, rawPaths: [".gjc/specs/x.md"] }),
+		).rejects.toBeInstanceOf(ToolError);
+		await expect(
+			assertDeepInterviewMutationRawPathsAllowed({
+				cwd,
+				rawPaths: [".gjc/state/ralplan-state.json"],
+				forceOverride: true,
+			}),
+		).rejects.toBeInstanceOf(ToolError);
 	});
 });
