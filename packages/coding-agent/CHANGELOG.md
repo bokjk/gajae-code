@@ -7,22 +7,22 @@
 - Reconciled the planning-phase mutation guard into one uniform policy across skill states (`deep-interview-mutation-guard.ts`). Previously only `deep-interview` blocked product-code mutation (and it blocked *all* `write`/`edit`/`ast_edit` targets, including neutral `/tmp` scratch), while `ralplan`/`ultragoal` planning enforced nothing beyond the always-on `.gjc/**` runtime-owned block, and `bash` got a free pass to mutate product code during the interview. Now: (1) the phase-boundary block is shared by every pre-approval planning phase — `deep-interview`, `ralplan`, and `ultragoal`'s `goal-planning` phase (`team` and executing `ultragoal` are unaffected); (2) `bash` reaches parity with `write`/`edit`/`ast_edit` so product-mutating shell commands are blocked too; and (3) neutral scratch writes to a system temp directory (`os.tmpdir()`/`$TMPDIR`, `/tmp`, `/var/tmp`) outside the project tree are always allowed, so an agent can stage a draft and persist it through the sanctioned CLI (`gjc deep-interview --write --spec <temp-path>`, `gjc ralplan --write --artifact <temp-path>`). The `.gjc/**` block is unchanged. Each planning skill now emits its own block message.
 - Made the reconciled mutation guard skill-transition/return safe by keying the block off the single canonical *current* workflow skill (the resolved top-level `skill` the HUD and skill-tool chain guard already use) instead of independently scanning every skill. Phase semantics now match the manifest and the Stop hook's `STOP_RELEASING_PHASES`: `handoff` and ralplan's pre-approval `final` keep blocking for `deep-interview`/`ralplan` (until the skill is demoted or cleared), executor phases (`ultragoal` `pending`/`active`/`blocked`) release, and a missing/corrupt mode-state still fails open. As a result a handoff (e.g. ralplan → ultragoal) never lets a stale planning entry block the executor, and a return (e.g. re-entering ralplan/deep-interview after a goal completes) reliably re-blocks.
 - Hardened the reconciled guard after architect + red-team review: the `gjc …` bash fast-path no longer skips scanning for compound/redirected/multiline commands (`gjc …; tee src/x`, `gjc … && echo x > .gjc/state/foo`, and newline-separated `gjc …\ntouch src/x` are now caught); the current-skill resolver prefers the most-recently-updated active entry so a stale planning row can never block a newer executor; neutral-temp classification canonicalizes paths (realpath of the nearest existing ancestor) so a `/tmp` symlink or macOS `/tmp`→`/private/tmp` alias pointing back into the project/`.gjc` is blocked; the deferred `ast_edit` apply path now mirrors the always-on `.gjc/**` block; and a heredoc delimiter (`<<EOF`) is no longer mis-read as a write target. Bash mutation detection remains best-effort defense-in-depth (the authoritative guard is the fully-pathed `write`/`edit`/`ast_edit` tools). Added generic guard exports (`getWorkflowMutationDecision`/`assertWorkflowMutationAllowed`/`assertWorkflowMutationRawPathsAllowed`) used by the session and `ast_edit` callers, with the `*DeepInterview*` names retained as compatibility aliases.
+- The published `@gajae-code/coding-agent` npm package now ships a prebuilt **minified** `dist/cli.js` (built with `bun build --minify`, not `--compile`) as the CLI entrypoint; the native addon and the stats/browser/eval worker entrypoints are emitted as externals so the bundle loads them from `node_modules` at runtime, and release compiled binaries also gain `--minify`. Measured `gjc --help` RSS dropped from ~302MB (running from source) to ~120MB (#879, #881).
+- Lazy-loaded the `eval` tool and its Python-kernel backend via dynamic import, so the kernel and its dependencies are no longer eagerly imported at startup and load only when the `eval` tool actually runs (#879).
+- `rust-analyzer` is now treated as an optional LSP server: its startup failure no longer raises a startup warning (it is auto-installed lazily on demand), while non-optional LSP server startup failures still warn (#872).
+
+### Fixed
+
+- Fixed planning-pipeline stage precedence so activating a downstream stage (`deep-interview → ralplan → ultragoal`) supersedes upstream stages by pipeline rank, preventing a stale upstream row from continuing to own the HUD, mutation gate, or primary active-state snapshot (#878).
+- Made `gjc state doctor` resolve the session id like every other state command (explicit `--session-id`, then payload `session_id`, then the `GJC_SESSION_ID` env var set for agent-initiated invocations), so it inspects the caller's session-scoped state files instead of a default location (#880).
+- Fixed a second workspace-relative import that the 0.6.0 #867 fix missed: `edit-mode.ts` now imports `$env` through the `@gajae-code/utils` package boundary instead of `../../../utils/src/env`, so global Bun installs no longer crash resolving edit mode, with package-boundary regression coverage (#868).
 
 ## [0.6.1] - 2026-06-18
 
 ### Fixed
 
 - Fixed the `computer` tool (and any other `z.union`/discriminated-union tool) shipping a bare top-level `anyOf`/`oneOf`/`allOf` `input_schema` root that strict providers (Amazon Bedrock Converse incl. Kiro/CodeWhisperer relays, OpenAI strict mode, Gemini) reject. Tool schema roots are now flattened to a single `type: "object"` across all providers via the shared `flattenToolRootCombinators`. See `@gajae-code/ai` 0.6.1.
-
-### Fixed
-
 - `gjc update` now runs the freshly installed `gjc --smoke-test` after version verification and tells users to restart running sessions, surfacing stale or partial runtime updates such as native-addon release mismatches immediately.
-
-## [0.6.1] - 2026-06-18
-
-### Fixed
-
-- Fixed the `computer` tool (and any other `z.union`/discriminated-union tool) shipping a bare top-level `anyOf`/`oneOf`/`allOf` `input_schema` root that strict providers (Amazon Bedrock Converse incl. Kiro/CodeWhisperer relays, OpenAI strict mode, Gemini) reject. Tool schema roots are now flattened to a single `type: "object"` across all providers via the shared `flattenToolRootCombinators`. See `@gajae-code/ai` 0.6.1.
 
 ## [0.6.0] - 2026-06-18
 ### Added

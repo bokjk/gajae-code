@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Token accounting no longer depends on a native embedded tokenizer. Token usage now anchors on provider-reported usage (`calculatePromptTokens`) and estimates only the unsent delta with a cheap heuristic (~chars/4 × 1.2); emergency compaction floors are unchanged. Compaction, branch summarization, and fork-seed paths were repointed off the removed native token-estimate alias. Part of dropping the bundled tiktoken/o200k tokenizer (#879).
+
 ## [0.5.4] - 2026-06-17
 
 ### Fixed
