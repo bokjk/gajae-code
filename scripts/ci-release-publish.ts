@@ -28,9 +28,6 @@ interface PublishPackage {
 	extraFiles?: readonly string[];
 	/** Extra tsgo invocations beyond `tsconfig.publish.json`. */
 	extraTypeConfigs?: readonly string[];
-	/** Per-export condition overrides applied after the src→dist types rewrite
-	 *  (e.g. repoint a published `./cli` import/default at the bundled JS). */
-	exportOverrides?: Readonly<Record<string, Readonly<Record<string, string>>>>;
 }
 
 type JsonValue = string | number | boolean | null | JsonObject | JsonValue[];
@@ -58,16 +55,7 @@ export const packages: PublishPackage[] = [
 		extraTypeConfigs: ["tsconfig.publish.client.json"],
 	},
 	{ dir: "packages/agent", kind: "typescript" },
-	{
-		dir: "packages/coding-agent",
-		kind: "typescript",
-		preBuild: [["bun", "run", "build:npm-bin"]],
-		extraFiles: ["dist/cli.js", "dist/sync-worker.ts", "dist/tab-worker-entry.ts", "dist/worker-entry.ts"],
-		// Published consumers (incl. the `gajae-code` wrapper that imports
-		// `@gajae-code/coding-agent/cli`) must hit the minified bundle, not the
-		// `./src/cli.ts` source the on-repo manifest keeps for local dev.
-		exportOverrides: { "./cli": { import: "./dist/cli.js", default: "./dist/cli.js" } },
-	},
+	{ dir: "packages/coding-agent", kind: "typescript" },
 	{ dir: "packages/bridge-client", kind: "typescript" },
 	{ dir: "packages/gajae-code", kind: "manifest" },
 ];
@@ -180,11 +168,7 @@ function rewriteExports(exports: JsonValue): JsonValue {
 	return out;
 }
 
-async function rewriteManifest(
-	pkgDir: string,
-	extraFiles: readonly string[],
-	exportOverrides?: Readonly<Record<string, Readonly<Record<string, string>>>>,
-): Promise<PackageManifest> {
+async function rewriteManifest(pkgDir: string, extraFiles: readonly string[]): Promise<PackageManifest> {
 	const manifestPath = path.join(pkgDir, "package.json");
 	const manifest = (await Bun.file(manifestPath).json()) as PackageManifest;
 	await rewriteDependencyFields(manifest);
@@ -192,14 +176,6 @@ async function rewriteManifest(
 		manifest.types = rewriteSrcPath(manifest.types);
 	}
 	if (manifest.exports !== undefined) manifest.exports = rewriteExports(manifest.exports);
-	if (exportOverrides && manifest.exports !== null && typeof manifest.exports === "object" && !Array.isArray(manifest.exports)) {
-		const exportsObj = manifest.exports as JsonObject;
-		for (const [key, conditions] of Object.entries(exportOverrides)) {
-			const existing = exportsObj[key];
-			const base = existing !== null && typeof existing === "object" && !Array.isArray(existing) ? (existing as JsonObject) : {};
-			exportsObj[key] = { ...base, ...conditions };
-		}
-	}
 	const files = Array.isArray(manifest.files) ? [...manifest.files] : [];
 	const hasDist = files.includes("dist");
 	if (!hasDist && !files.includes("dist/types")) files.push("dist/types");
@@ -231,7 +207,7 @@ async function preparePackage(pkg: PublishPackage): Promise<PackageManifest> {
 	for (const cfg of pkg.extraTypeConfigs ?? []) {
 		await $`bun x tsgo -p ${cfg}`.cwd(pkgDir);
 	}
-	return rewriteManifest(pkgDir, pkg.extraFiles ?? [], pkg.exportOverrides);
+	return rewriteManifest(pkgDir, pkg.extraFiles ?? []);
 }
 
 async function publishPackage(pkg: PublishPackage): Promise<void> {
