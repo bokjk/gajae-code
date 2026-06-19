@@ -44,7 +44,11 @@ import { BUILTIN_SLASH_COMMANDS, loadSlashCommands } from "../extensibility/slas
 import { consumePendingGoalModeRequest } from "../gjc-runtime/goal-mode-request";
 import { type Goal, type GoalModeState, normalizeGoal } from "../goals/state";
 import { resolveLocalUrlToPath } from "../internal-urls";
-import { LSP_STARTUP_EVENT_CHANNEL, type LspStartupEvent } from "../lsp/startup-events";
+import {
+	filterNoisyOptionalMissingLspStartupFailures,
+	LSP_STARTUP_EVENT_CHANNEL,
+	type LspStartupEvent,
+} from "../lsp/startup-events";
 import {
 	humanizePlanTitle,
 	type PlanApprovalDetails,
@@ -2066,7 +2070,9 @@ export class InteractiveMode implements InteractiveModeContext {
 			return;
 		}
 
-		const failedServers = event.servers.filter(server => server.status === "error");
+		const failedServers = filterNoisyOptionalMissingLspStartupFailures(
+			event.servers.filter(server => server.status === "error"),
+		);
 
 		if (failedServers.length === 1) {
 			const failedServer = failedServers[0];

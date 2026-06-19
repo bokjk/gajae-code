@@ -77,7 +77,11 @@ import { loadSkills, type Skill, type SkillWarning, setActiveSkills } from "./ex
 import type { FileSlashCommand } from "./extensibility/slash-commands";
 import type { HindsightSessionState } from "./hindsight/state";
 import { LocalProtocolHandler, type LocalProtocolOptions } from "./internal-urls";
-import { LSP_STARTUP_EVENT_CHANNEL, type LspStartupEvent } from "./lsp/startup-events";
+import {
+	filterNoisyOptionalMissingLspStartupFailures,
+	LSP_STARTUP_EVENT_CHANNEL,
+	type LspStartupEvent,
+} from "./lsp/startup-events";
 import { resolveMemoryBackend } from "./memory-backend";
 import asyncResultTemplate from "./prompts/tools/async-result.md" with { type: "text" };
 import { AgentRegistry, MAIN_AGENT_ID } from "./registry/agent-registry";
@@ -2151,9 +2155,20 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 							servers: result.servers,
 						};
 						eventBus.emit(LSP_STARTUP_EVENT_CHANNEL, event);
+						const noisyOptionalFailures = result.servers.filter(
+							server =>
+								server.status === "error" &&
+								filterNoisyOptionalMissingLspStartupFailures([server]).length === 0,
+						);
+						if (noisyOptionalFailures.length > 0) {
+							logger.debug("Optional LSP server unavailable during warmup", {
+								cwd,
+								servers: noisyOptionalFailures.map(server => ({ name: server.name, error: server.error })),
+							});
+						}
 					} catch (error) {
 						const errorMessage = error instanceof Error ? error.message : String(error);
-						logger.warn("LSP server warmup failed", { cwd, error: errorMessage });
+						logger.debug("LSP server warmup failed", { cwd, error: errorMessage });
 						for (const server of lspServers ?? []) {
 							server.status = "error";
 							server.error = errorMessage;
