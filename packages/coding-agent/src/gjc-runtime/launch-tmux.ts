@@ -153,13 +153,16 @@ function buildEnvAssignments(values: Record<string, string> | undefined): string
 function powershellQuote(value: string): string {
 	return `'${value.replace(/'/g, "''")}'`;
 }
+function stripRootTmuxFlag(rawArgs: string[]): string[] {
+	return rawArgs.filter(arg => arg !== "--tmux");
+}
 
 function buildWindowsPowerShellInnerCommand(context: CommandResolutionContext, rawArgs: string[]): string {
 	const command = resolveCurrentGjcCommand(context);
 	const envLines = Object.entries({ [GJC_TMUX_LAUNCHED_ENV]: "1", ...(context.extraEnv ?? {}) }).map(
 		([key, value]) => `$env:${key} = ${powershellQuote(value)}`,
 	);
-	const invocation = ["&", ...command.map(powershellQuote), ...rawArgs.map(powershellQuote)].join(" ");
+	const invocation = ["&", ...command.map(powershellQuote), ...stripRootTmuxFlag(rawArgs).map(powershellQuote)].join(" ");
 	const exitLine = "if ($null -ne $LASTEXITCODE) { exit $LASTEXITCODE } else { exit 1 }";
 	const script = [...envLines, invocation, exitLine].join("\n");
 	const encodedCommand = Buffer.from(script, "utf16le").toString("base64");
@@ -213,7 +216,7 @@ function pathModuleForPlatform(platform: NodeJS.Platform | undefined): typeof pa
 function buildInnerCommand(context: CommandResolutionContext, rawArgs: string[]): string {
 	if (isWindowsPlatform(context.platform)) return buildWindowsPowerShellInnerCommand(context, rawArgs);
 	const command = resolveCurrentGjcCommand(context);
-	const quoted = [...command, ...rawArgs].map(shellQuote).join(" ");
+	const quoted = [...command, ...stripRootTmuxFlag(rawArgs)].map(shellQuote).join(" ");
 	return `exec env ${GJC_TMUX_LAUNCHED_ENV}=1${buildEnvAssignments(context.extraEnv)} ${quoted}`;
 }
 
@@ -432,12 +435,11 @@ export function launchDefaultTmuxIfNeeded(context: TmuxLaunchContext): boolean {
 			sessionId: plan.sessionId ?? null,
 			sessionStateFile: plan.sessionStateFile ?? null,
 		});
-		if (profile.failures.length > 0) {
+		const ownershipFailure = profile.failures.find(item => item.command.args.includes("@gjc-profile"));
+		if (ownershipFailure) {
 			cleanupCreatedTmuxSession(plan, spawnSync, options);
-			const failure =
-				profile.failures.find(item => item.command.args.includes("@gjc-profile")) ?? profile.failures[0];
 			(context.diagnosticWriter ?? safeStderrWrite)(
-				formatTmuxLaunchDiagnostic("profile tagging failed", failure?.stderr),
+				formatTmuxLaunchDiagnostic("profile tagging failed", ownershipFailure.stderr),
 			);
 			return true;
 		}

@@ -121,10 +121,8 @@ describe("default GJC tmux launch", () => {
 		expect(plan.sessionName.startsWith(GJC_TMUX_SESSION_PREFIX)).toBe(true);
 		expect(plan.tmuxCommand).toBe("tmux");
 		expect(plan.newSessionArgs.slice(0, 6)).toEqual(["new-session", "-d", "-s", plan.sessionName, "-c", "/repo"]);
-		expect(plan?.innerCommand).toContain(`${GJC_TMUX_LAUNCHED_ENV}=1`);
-		expect(plan?.innerCommand).toContain(
-			"'/bin/bun' '/repo/packages/coding-agent/src/cli.ts' '--tmux' 'hello world'",
-		);
+		expect(plan?.innerCommand).toContain("'/bin/bun' '/repo/packages/coding-agent/src/cli.ts' 'hello world'");
+		expect(plan?.innerCommand).not.toContain("'--tmux'");
 		expect(plan.innerCommand).toContain("GJC_COORDINATOR_SESSION_ID=");
 		expect(plan.innerCommand).toContain("GJC_COORDINATOR_SESSION_STATE_FILE=");
 	});
@@ -172,9 +170,8 @@ describe("default GJC tmux launch", () => {
 		const script = decodePowerShellEncodedCommand(plan.innerCommand);
 		expect(script).toContain("$env:GJC_TMUX_LAUNCHED = '1'");
 		expect(script).toContain(`$env:GJC_COORDINATOR_SESSION_ID = '${plan.sessionId}'`);
-		expect(script).toContain(
-			"& 'C:\\Program Files\\Bun\\bun.exe' 'C:\\repo\\packages\\coding-agent\\src\\cli.ts' '--tmux' 'say it''s ok'",
-		);
+		expect(script).toContain("& 'C:\\Program Files\\Bun\\bun.exe' 'C:\\repo\\packages\\coding-agent\\src\\cli.ts' 'say it''s ok'");
+		expect(script).not.toContain("'--tmux'");
 		expect(script).toEndWith("if ($null -ne $LASTEXITCODE) { exit $LASTEXITCODE } else { exit 1 }");
 	});
 	it("uses a host command for compiled Bun virtual entrypoints", () => {
@@ -195,7 +192,7 @@ describe("default GJC tmux launch", () => {
 
 		expect(plan.innerCommand).not.toContain("$bunfs");
 		expect(plan.innerCommand).toContain(`${GJC_TMUX_LAUNCHED_ENV}=1`);
-		expect(plan.innerCommand).toContain("'/home/me/.local/bin/gjc' '--tmux' 'hello world'");
+		expect(plan.innerCommand).toContain("'/home/me/.local/bin/gjc' 'hello world'");
 	});
 
 	it("falls back to gjc when compiled Bun virtual entrypoint has no host exec path", () => {
@@ -212,7 +209,7 @@ describe("default GJC tmux launch", () => {
 		});
 
 		expect(plan?.innerCommand).not.toContain("$bunfs");
-		expect(plan?.innerCommand).toContain("'gjc' '--tmux'");
+		expect(plan?.innerCommand).toContain("'gjc'");
 	});
 
 	it("attaches existing tagged session for matching worktree branch", () => {
@@ -568,6 +565,37 @@ describe("default GJC tmux launch", () => {
 		expect(diagnostics).toHaveLength(1);
 		expect(diagnostics[0]).toStartWith("gjc --tmux failed after creating tmux session: profile tagging failed.");
 		expect(diagnostics[0].length).toBeLessThan(320);
+	});
+
+	it("continues root launch when non-ownership metadata tagging fails", () => {
+		const calls: { command: string; args: string[]; options: TmuxSpawnOptions }[] = [];
+		const diagnostics: string[] = [];
+		const handled = launchDefaultTmuxIfNeeded({
+			parsed: args({ tmux: true }),
+			rawArgs: [],
+			cwd: "/repo",
+			env: {},
+			argv: ["/usr/local/bin/gjc"],
+			execPath: "/bin/bun",
+			platform: "win32",
+			tty: interactiveTty,
+			tmuxAvailable: true,
+			currentBranch: "issue-882",
+			diagnosticWriter: message => diagnostics.push(message),
+			spawnSync: (command, spawnArgs, options) => {
+				calls.push({ command, args: spawnArgs, options });
+				if (spawnArgs.includes("@gjc-branch")) return { exitCode: 1, stderr: "psmux: connection timed out" };
+				if (spawnArgs[0] === "attach-session") return { exitCode: 0 };
+				return { exitCode: 0 };
+			},
+		});
+
+		expect(handled).toBe(true);
+		expect(calls.some(call => call.args[0] === "new-session")).toBe(true);
+		expect(calls.map(call => call.args)).toContainEqual(["set-option", "-t", expect.any(String), "@gjc-profile", "1"]);
+		expect(calls.some(call => call.args[0] === "kill-session")).toBe(false);
+		expect(calls.some(call => call.args[0] === "attach-session")).toBe(true);
+		expect(diagnostics).toEqual([]);
 	});
 
 	it("handles and reports partial launch when attach fails after profile succeeds", () => {
