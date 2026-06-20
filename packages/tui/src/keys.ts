@@ -305,6 +305,7 @@ const KITTY_MOD_SUPER = 8;
 const KITTY_MOD_NUM_LOCK = 128;
 const KITTY_LOCK_MASK = 64 + 128; // Caps Lock + Num Lock
 const MODIFY_OTHER_KEYS_PATTERN = /^\x1b\[27;(\d+);(\d+)~$/;
+const CSI_ENTER_MODIFIER_PATTERN = /^\x1b\[13;(\d+)~$/;
 const KITTY_KEYPAD_OPERATOR_TEXT: Record<number, string> = {
 	57410: "/",
 	57411: "*",
@@ -520,7 +521,33 @@ export function decodePrintableKey(data: string): string | undefined {
  * @param data - Raw input data from terminal
  * @param keyId - Key identifier (e.g., "ctrl+c", "escape", Key.ctrl("c"))
  */
+function parseCsiEnterModifierKey(data: string): string | undefined {
+	const match = data.match(CSI_ENTER_MODIFIER_PATTERN);
+	if (!match) return undefined;
+	const modValue = Number.parseInt(match[1] ?? "", 10);
+	if (!Number.isFinite(modValue)) return undefined;
+	const modifier = (modValue - 1) & ~KITTY_LOCK_MASK;
+	const modifiers: string[] = [];
+	if (modifier & KITTY_MOD_SHIFT) modifiers.push("shift");
+	if (modifier & KITTY_MOD_CTRL) modifiers.push("ctrl");
+	if (modifier & KITTY_MOD_ALT) modifiers.push("alt");
+	if (modifier & KITTY_MOD_SUPER) modifiers.push("super");
+	const supportedModifierMask = KITTY_MOD_SHIFT | KITTY_MOD_CTRL | KITTY_MOD_ALT | KITTY_MOD_SUPER;
+	if (modifier & ~supportedModifierMask) return undefined;
+	return [...modifiers, "enter"].join("+");
+}
+
+function keyIdMatchesParsedKey(keyId: KeyId, parsed: string): boolean {
+	if (keyId === parsed) return true;
+	const expectedParts = keyId.split("+");
+	const parsedParts = parsed.split("+");
+	if (expectedParts.at(-1) !== parsedParts.at(-1)) return false;
+	return expectedParts.slice(0, -1).sort().join("+") === parsedParts.slice(0, -1).sort().join("+");
+}
+
 export function matchesKey(data: string, keyId: KeyId): boolean {
+	const parsed = parseCsiEnterModifierKey(data);
+	if (parsed !== undefined && keyIdMatchesParsedKey(keyId, parsed)) return true;
 	return matchesKeyNative(data, keyId, kittyProtocolActive);
 }
 
@@ -533,5 +560,5 @@ export function matchesKey(data: string, keyId: KeyId): boolean {
  * @param data - Raw input data from terminal
  */
 export function parseKey(data: string): string | undefined {
-	return parseKeyNative(data, kittyProtocolActive) ?? undefined;
+	return parseCsiEnterModifierKey(data) ?? parseKeyNative(data, kittyProtocolActive) ?? undefined;
 }
