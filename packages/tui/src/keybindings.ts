@@ -265,6 +265,30 @@ export class KeybindingsManager {
 	}
 }
 
+/**
+ * Detect default-key collisions across the registry: keys whose default
+ * binding is claimed by more than one action. Cross-context collisions are
+ * often intentional (the dispatch context disambiguates them), so this is a
+ * diagnostics aid for auditing the surface, not an error by itself.
+ */
+export function detectDefaultKeyCollisions(definitions: KeybindingDefinitions): KeybindingConflict[] {
+	const claims = new Map<KeyId, Set<Keybinding>>();
+	for (const [id, definition] of Object.entries(definitions)) {
+		for (const key of normalizeKeys(definition.defaultKeys)) {
+			const claimants = claims.get(key) ?? new Set<Keybinding>();
+			claimants.add(id as Keybinding);
+			claims.set(key, claimants);
+		}
+	}
+	const collisions: KeybindingConflict[] = [];
+	for (const [key, keybindings] of claims) {
+		if (keybindings.size > 1) {
+			collisions.push({ key, keybindings: [...keybindings] });
+		}
+	}
+	return collisions;
+}
+
 let globalKeybindings: KeybindingsManager | null = null;
 
 export function setKeybindings(keybindings: KeybindingsManager): void {

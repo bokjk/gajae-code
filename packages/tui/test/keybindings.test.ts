@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { KeybindingsManager, TUI_KEYBINDINGS } from "@gajae-code/tui/keybindings";
+import { detectDefaultKeyCollisions, KeybindingsManager, TUI_KEYBINDINGS } from "@gajae-code/tui/keybindings";
 
 describe("KeybindingsManager", () => {
 	it("does not evict selector confirm when input submit is rebound", () => {
@@ -33,5 +33,34 @@ describe("KeybindingsManager", () => {
 			},
 		]);
 		expect(keybindings.getKeys("tui.editor.cursorLeft")).toEqual(["left", "ctrl+b"]);
+	});
+});
+
+describe("detectDefaultKeyCollisions", () => {
+	it("reports keys whose default binding is claimed by more than one action", () => {
+		const collisions = detectDefaultKeyCollisions({
+			"tui.input.submit": { defaultKeys: "enter", description: "Submit" },
+			"tui.select.confirm": { defaultKeys: "enter", description: "Confirm" },
+			"tui.editor.cursorUp": { defaultKeys: "up", description: "Up" },
+		});
+
+		expect(collisions).toEqual([{ key: "enter", keybindings: ["tui.input.submit", "tui.select.confirm"] }]);
+	});
+
+	it("returns no collisions when every default key is unique", () => {
+		expect(
+			detectDefaultKeyCollisions({
+				"a.one": { defaultKeys: "ctrl+a", description: "" },
+				"a.two": { defaultKeys: ["ctrl+b", "alt+b"], description: "" },
+			}),
+		).toEqual([]);
+	});
+
+	it("flags the known cross-context default reuse in TUI_KEYBINDINGS", () => {
+		const byKey = new Map(detectDefaultKeyCollisions(TUI_KEYBINDINGS).map(c => [c.key, c.keybindings]));
+		// enter is intentionally shared by submit + confirm (context-disambiguated).
+		expect(byKey.get("enter")).toEqual(expect.arrayContaining(["tui.input.submit", "tui.select.confirm"]));
+		// ctrl+c is shared by input copy + select cancel.
+		expect(byKey.get("ctrl+c")).toEqual(expect.arrayContaining(["tui.input.copy", "tui.select.cancel"]));
 	});
 });

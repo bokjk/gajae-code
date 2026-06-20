@@ -46,3 +46,16 @@ Set an action to an empty array to disable it:
 | `app.stt.toggle` | `Alt+H` | Toggle speech-to-text recording |
 
 Older unqualified action names are migrated when `keybindings.json` is loaded, but new docs and new configs should use the namespaced action IDs above.
+
+## Auditing default-key collisions
+
+Some default chords are intentionally reused across different UI contexts, where the focused component disambiguates them at dispatch time. For example `Enter` maps to both input submit and selection confirm, and `Ctrl+C` maps to both input copy and selection cancel. These are not conflicts — only one context is active at a time.
+
+To audit the registry for keys whose default binding is claimed by more than one action, use `detectDefaultKeyCollisions(definitions)` from `@gajae-code/tui/keybindings`. It returns one entry per colliding key with the list of claiming action IDs, which is useful when adding new defaults or reviewing the surface. User-remap conflicts (multiple actions bound to the same chord in `keybindings.json`) continue to be reported separately by `KeybindingsManager.getConflicts()`.
+
+Two audit clarifications for the current surface:
+
+- `app.clipboard.copyLine` is registry-backed and dispatched through the input controller's custom key handlers, not hardcoded.
+- `tui.input.copy` is declared in the registry but is not currently dispatched by `Editor.handleInput`.
+
+The editor's configurable action defaults (including the platform-aware `app.clipboard.pasteImage` default) are derived directly from the central `KEYBINDINGS` registry, so there is a single source of truth for those defaults.
