@@ -5,7 +5,7 @@ thinking-level: medium
 hide: true
 ---
 
-Generate AGENTS.md by launching multiple `explore` agents in parallel (via `task` tool) scanning different areas (core src, tests, configs/build, scripts/docs), then synthesize findings into a single file.
+Generate AGENTS.md by scanning different areas (core src, tests, configs/build, scripts/docs) with `read`, `search`, and `find`, then synthesize findings into a single file.
 
 <structure>
 - **Project Overview**: Brief description of project purpose
