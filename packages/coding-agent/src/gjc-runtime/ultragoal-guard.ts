@@ -491,13 +491,20 @@ export interface UltragoalPauseBlockDiagnostic {
 
 /**
  * While an Ultragoal run is active, `goal({"op":"pause"})` is only allowed when the
- * latest durable ledger event classifies the blocker as `human_blocked`. Resolvable
- * blockers must be worked, not parked. Reads fail closed so an unreadable ledger
+ * current durable Ultragoal state is readable and the latest durable ledger event
+ * classifies the current blocker as `human_blocked`. Resolvable blockers must be
+ * worked, not parked. Reads fail closed so unreadable durable state or ledger data
  * blocks pause rather than silently allowing a give-up.
  */
 export async function isUltragoalPauseBlocked(cwd: string): Promise<UltragoalPauseBlockDiagnostic> {
 	if (!cwd) return { blocked: false, reason: "No cwd to resolve durable Ultragoal state." };
 	const ask = await isUltragoalAskBlocked(cwd);
+	if (ask.source === "durable_state_unreadable") {
+		return {
+			blocked: true,
+			reason: `Unable to verify current durable Ultragoal state for pause: ${ask.reason}`,
+		};
+	}
 	if (!ask.active) return { blocked: false, reason: "No active Ultragoal run." };
 	let ledger: UltragoalLedgerEvent[];
 	try {

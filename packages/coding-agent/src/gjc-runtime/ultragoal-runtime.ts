@@ -892,32 +892,29 @@ function categorizeComputerChangePath(value: string): UltragoalChangeCategory {
 	return "other";
 }
 
-function isComputerChangePath(row: UltragoalChangeSetPath): boolean {
+function isComputerControlSurfaceCategory(category: UltragoalChangeCategory): boolean {
 	return (
-		categorizeComputerChangePath(row.path) !== "other" ||
-		(row.oldPath ? categorizeComputerChangePath(row.oldPath) !== "other" : false)
+		category === "code" || category === "generated-binding" || category === "tool" || category === "settings-registry"
 	);
 }
 
-function isDocsOnlyStaticComputerChangeSet(changeSet: UltragoalChangeSet | undefined): boolean {
-	if (!changeSet || changeSet.paths.length === 0) return false;
-	return changeSet.paths.every(row => {
-		const category = row.category ?? categorizeComputerChangePath(row.path);
-		const oldCategory = row.oldPath ? categorizeComputerChangePath(row.oldPath) : category;
-		return category === "docs-static" && oldCategory === "docs-static";
-	});
+function isComputerControlSurfaceChangePath(row: UltragoalChangeSetPath): boolean {
+	const category = row.category ?? categorizeComputerChangePath(row.path);
+	const oldCategory = row.oldPath ? categorizeComputerChangePath(row.oldPath) : category;
+	return isComputerControlSurfaceCategory(category) || isComputerControlSurfaceCategory(oldCategory);
 }
 
 function trustedChangeSetRequiresComputerSuite(changeSet: UltragoalChangeSet | undefined): boolean {
 	if (!changeSet?.trusted) return false;
-	if (isDocsOnlyStaticComputerChangeSet(changeSet)) return false;
-	return changeSet.paths.some(isComputerChangePath);
+	return changeSet.paths.some(isComputerControlSurfaceChangePath);
 }
 
 function requiresComputerRedTeamSuite(executorQa: JsonObject, changeSet: UltragoalChangeSet | undefined): boolean {
 	if (trustedChangeSetRequiresComputerSuite(changeSet)) return true;
 	const declaredPaths = Array.isArray(executorQa.changedPaths) ? executorQa.changedPaths : [];
-	return declaredPaths.some(value => typeof value === "string" && categorizeComputerChangePath(value) !== "other");
+	return declaredPaths.some(
+		value => typeof value === "string" && isComputerControlSurfaceCategory(categorizeComputerChangePath(value)),
+	);
 }
 
 function normalizeAdversarialCaseId(value: string): string {
@@ -3337,6 +3334,25 @@ function renderUltragoalHelp(args: readonly string[]): string | null {
 			"",
 		].join("\n");
 	}
+	if (subject === "classify-blocker") {
+		return [
+			"Run native GJC Ultragoal workflow commands",
+			"",
+			"USAGE",
+			"  $ gjc ultragoal classify-blocker --classification <human_blocked|resolvable> --evidence <text> [FLAGS]",
+			"",
+			"FLAGS",
+			"      --classification=<value>     Required. human_blocked authorizes pause only as the latest ledger event; resolvable never authorizes pause",
+			"      --evidence=<value>           Required. Specific blocker evidence; must name the human-only dependency for human_blocked",
+			"      --goal-id=<value>            Optional durable .gjc/ultragoal goal id, e.g. G001",
+			"      --json                       Output a machine-readable receipt",
+			"",
+			"EXAMPLES",
+			'  $ gjc ultragoal classify-blocker --classification resolvable --evidence "failing test can be fixed autonomously"',
+			'  $ gjc ultragoal classify-blocker --classification human_blocked --evidence "user must provide production API credentials" --goal-id G001',
+			"",
+		].join("\n");
+	}
 	return [
 		"Run native GJC Ultragoal workflow commands",
 		"",
@@ -3351,8 +3367,9 @@ function renderUltragoalHelp(args: readonly string[]): string | null {
 		"  review",
 		"  steer",
 		"  record-review-blockers",
+		"  classify-blocker",
 		"",
-		"Run `gjc ultragoal checkpoint --help` or `gjc ultragoal review --help` for command-specific requirements.",
+		"Run `gjc ultragoal checkpoint --help`, `gjc ultragoal review --help`, or `gjc ultragoal classify-blocker --help` for command-specific requirements.",
 		"",
 	].join("\n");
 }

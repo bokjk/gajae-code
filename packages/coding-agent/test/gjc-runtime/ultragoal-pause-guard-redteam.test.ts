@@ -27,6 +27,10 @@ async function createActiveRun(): Promise<string> {
 	return cwd;
 }
 
+function ultragoalPath(cwd: string, file: "goals.json" | "ledger.jsonl"): string {
+	return path.join(cwd, ".gjc", `_session-${TEST_SESSION_ID}`, "ultragoal", file);
+}
+
 afterEach(async () => {
 	if (ORIGINAL_GJC_SESSION_ID === undefined) delete process.env.GJC_SESSION_ID;
 	else process.env.GJC_SESSION_ID = ORIGINAL_GJC_SESSION_ID;
@@ -78,6 +82,48 @@ describe("ultragoal pause guard red-team coverage", () => {
 		).rejects.toThrow(/classification must be/);
 	});
 
+	it("fails closed when goals.json is missing even if the latest ledger row is human_blocked", async () => {
+		const cwd = await createActiveRun();
+		await recordUltragoalBlockerClassification({
+			cwd,
+			classification: "human_blocked",
+			evidence: "User must provide production credentials",
+		});
+		await fs.rm(ultragoalPath(cwd, "goals.json"));
+
+		const diagnostic = await isUltragoalPauseBlocked(cwd);
+		expect(diagnostic.blocked).toBe(true);
+		expect(diagnostic.reason).toContain("Unable to verify current durable Ultragoal state");
+		expect(diagnostic.reason).toContain("goals.json is missing");
+	});
+
+	it("fails closed when goals.json is corrupt even if the latest ledger row is human_blocked", async () => {
+		const cwd = await createActiveRun();
+		await recordUltragoalBlockerClassification({
+			cwd,
+			classification: "human_blocked",
+			evidence: "User must provide production credentials",
+		});
+		await Bun.write(ultragoalPath(cwd, "goals.json"), "{not-json");
+
+		const diagnostic = await isUltragoalPauseBlocked(cwd);
+		expect(diagnostic.blocked).toBe(true);
+		expect(diagnostic.reason).toContain("Unable to verify current durable Ultragoal state");
+	});
+
+	it("fails closed when the ledger is corrupt instead of trusting stale classifications", async () => {
+		const cwd = await createActiveRun();
+		await recordUltragoalBlockerClassification({
+			cwd,
+			classification: "human_blocked",
+			evidence: "User must provide production credentials",
+		});
+		await fs.appendFile(ultragoalPath(cwd, "ledger.jsonl"), "{not-json\n");
+
+		const diagnostic = await isUltragoalPauseBlocked(cwd);
+		expect(diagnostic.blocked).toBe(true);
+		expect(diagnostic.reason).toContain("Unable to verify current durable Ultragoal state");
+	});
 	it("does not throw when no active ultragoal run exists", async () => {
 		const cwd = await tempDir();
 		delete process.env.GJC_SESSION_ID;
