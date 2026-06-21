@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Stopped including `bash` in the planning-phase mutation guard. The phase-boundary block (and the always-on `.gjc/**` runtime-owned block) now apply only to the fully-pathed `write`/`edit`/`ast_edit` tools; `bash` is never blocked by any workflow skill (`deep-interview`, `ralplan`, `ultragoal` goal-planning), so read-only shell commands run freely during planning. This reverts the `bash` parity added in 0.6.2; product-code and `.gjc/**` mutation are still gated through the dedicated edit tools.
+
 ## [0.6.4] - 2026-06-20
 
 ### Changed

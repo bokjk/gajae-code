@@ -33,27 +33,10 @@ function planningPhaseBlockMessage(skill: CanonicalGjcWorkflowSkill): string {
 	return DEEP_INTERVIEW_MUTATION_BLOCK_MESSAGE;
 }
 
-const BLOCKED_TOOL_NAMES = new Set(["edit", "write", "ast_edit", "bash"]);
+const BLOCKED_TOOL_NAMES = new Set(["edit", "write", "ast_edit"]);
 const ARCHIVE_OR_SQLITE_BASE_RE = /^(.+?\.(?:tar\.gz|sqlite3|sqlite|db3|zip|tgz|tar|db))(?:$|:)/i;
 const INTERNAL_SCHEME_RE = /^[a-z][a-z0-9+.-]*:\/\//i;
 const VIM_FILE_SWITCH_RE = /^\s*:(?:e|e!|edit|edit!)(?:\s+([^<\r\n]+))?(?:<CR>|\r|\n|$)/i;
-const BASH_TOKEN_RE = /'[^']*'|"(?:\\.|[^"\\])*"|\S+/g;
-const BASH_REDIRECT_RE = /^(?:\d*)>>?$/;
-const BASH_HEREDOC_RE = /^(?:\d*)<<-?$/;
-// Shell command-list / redirection / substitution operators. Includes `\r` and
-// `\n` because the shell treats a newline as a command separator and tool command
-// strings can be multiline (e.g. heredocs).
-const BASH_CONTROL_OPERATOR_RE = /[;&|<>`\r\n]|\$\(/;
-// Best-effort, defense-in-depth bash mutation detection. The authoritative
-// planning-phase guard is the dedicated `write`/`edit`/`ast_edit` tools (fully
-// pathed); this catches the common shell mutators plus all redirect targets so a
-// cooperative agent cannot trivially side-step those tools. It is deliberately
-// NOT exhaustive: arbitrary interpreters (`python -c`, `node -e`) and the
-// `key=value` operand forms of utilities like `dd of=` are not parsed, and path
-// classification is lexical (no realpath), matching the rest of this guard and
-// the broader `.gjc` path handling. Hardening any of these would require a real
-// shell parser / symlink resolution and is out of scope for the planning rails.
-const BASH_MUTATION_COMMANDS = new Set(["rm", "mv", "cp", "touch", "mkdir", "ln", "tee"]);
 
 type ToolWithEditMode = AgentTool & {
 	mode?: unknown;
@@ -347,84 +330,10 @@ function extractEditTargets(args: unknown, tool: ToolWithEditMode): ExtractedTar
 	return targets;
 }
 
-function extractBashTargets(args: unknown): ExtractedTargets {
-	const record = getRecord(args);
-	const command = safeString(record?.command).trim();
-	const targets: ExtractedTargets = { paths: [], unknown: false };
-	if (!command) {
-		targets.unknown = true;
-		return targets;
-	}
-	// Fast path for a sanctioned `gjc …` invocation, but ONLY when it is a single
-	// command with no shell control operators or redirects. Otherwise a compound
-	// like `gjc … ; tee src/x` or `gjc … > .gjc/state/foo` would skip scanning and
-	// bypass both the planning block and the always-on `.gjc/**` block, so fall
-	// through to full token scanning (which leaves the `gjc` segment's own args
-	// unextracted but still catches the trailing mutation/redirect).
-	if (/^gjc(?:\s|$)/.test(command) && !BASH_CONTROL_OPERATOR_RE.test(command)) return targets;
-
-	const tokens = command.match(BASH_TOKEN_RE)?.map(unquoteBashToken) ?? [];
-	for (let index = 0; index < tokens.length; index++) {
-		const token = tokens[index] ?? "";
-		if (BASH_REDIRECT_RE.test(token)) {
-			addPath(targets, tokens[index + 1]);
-			index++;
-			continue;
-		}
-		if (/^(?:>|\d+>)&\d+$/.test(token)) {
-			continue;
-		}
-		const redirectMatch = token.match(/^(?:\d*)>>?(.+)$/);
-		if (redirectMatch?.[1]) {
-			addPath(targets, redirectMatch[1]);
-			continue;
-		}
-		// A heredoc delimiter (`<<EOF`) is a here-document word, NOT a filesystem
-		// target. Consume it without recording a target so a legitimate
-		// `cat <<EOF > /tmp/scratch.md` is judged solely by its redirect target.
-		if (BASH_HEREDOC_RE.test(token)) {
-			index++;
-			continue;
-		}
-		if (/^(?:\d*)<<-?.+$/.test(token)) {
-			continue;
-		}
-		if (isMutationBashCommand(tokens, index)) {
-			for (let targetIndex = index + 1; targetIndex < tokens.length; targetIndex++) {
-				const target = tokens[targetIndex] ?? "";
-				if (isBashCommandBoundary(target)) break;
-				if (target.startsWith("-")) continue;
-				addPath(targets, target);
-			}
-		}
-	}
-	return targets;
-}
-
-function unquoteBashToken(token: string): string {
-	if (token.length < 2) return token;
-	const quote = token[0];
-	if ((quote === "'" || quote === '"') && token.at(-1) === quote) return token.slice(1, -1);
-	return token;
-}
-
-function isBashCommandBoundary(token: string): boolean {
-	return [";", "&&", "||", "|"].includes(token);
-}
-
-function isMutationBashCommand(tokens: string[], index: number): boolean {
-	const token = path.basename(tokens[index] ?? "");
-	if (BASH_MUTATION_COMMANDS.has(token)) return true;
-	if (token !== "sed") return false;
-	const next = tokens[index + 1] ?? "";
-	return next === "-i" || next.startsWith("-i") || next.includes("i");
-}
-
 function extractTargets(tool: ToolWithEditMode, args: unknown): ExtractedTargets {
 	if (tool.name === "write") return extractWriteTargets(args);
 	if (tool.name === "ast_edit") return extractAstEditTargets(args);
 	if (tool.name === "edit") return extractEditTargets(args, tool);
-	if (tool.name === "bash") return extractBashTargets(args);
 	return { paths: [], unknown: true };
 }
 

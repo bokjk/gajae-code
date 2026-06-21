@@ -269,7 +269,7 @@ describe("deep-interview mutation guard", () => {
 		}
 	});
 
-	it("blocks mutating bash that targets .gjc during active deep-interview", async () => {
+	it("never blocks bash during active deep-interview, even targeting .gjc or product code", async () => {
 		const cwd = await makeTempRoot();
 		await writeActiveDeepInterview(cwd);
 
@@ -279,6 +279,8 @@ describe("deep-interview mutation guard", () => {
 			"cp source.md .gjc/specs/deep-interview-x.md",
 			"sed -i 's/a/b/' .gjc/plans/plan.md",
 			"cat source.md > .gjc/specs/deep-interview-x.md",
+			"tee src/product.ts",
+			"cat <<EOF > src/product.ts\nx\nEOF",
 		]) {
 			const decision = await getDeepInterviewMutationDecision({
 				cwd,
@@ -286,9 +288,8 @@ describe("deep-interview mutation guard", () => {
 				tool: tool("bash"),
 				args: { command },
 			});
-			expect(decision.blocked).toBe(true);
-			expect(decision.message).toContain("runtime-owned");
-			expect(["gjc-target", "workflow-state-target"]).toContain(decision.reason ?? "");
+			expect(decision.blocked).toBe(false);
+			expect(decision.targets).toEqual([]);
 		}
 	});
 
@@ -457,51 +458,6 @@ describe("deep-interview mutation guard", () => {
 		expect(decision.blocked).toBe(false);
 	});
 
-	it("blocks product-mutating bash during a planning phase (bash parity) but allows temp scratch", async () => {
-		const cwd = await makeTempRoot();
-		await writeActiveDeepInterview(cwd);
-
-		const blockedBash = await getDeepInterviewMutationDecision({
-			cwd,
-			sessionId: "session-a",
-			tool: tool("bash"),
-			args: { command: "tee src/product.ts" },
-		});
-		expect(blockedBash.blocked).toBe(true);
-		expect(blockedBash.reason).toBe("phase-boundary");
-		expect(blockedBash.message).toBe(DEEP_INTERVIEW_MUTATION_BLOCK_MESSAGE);
-
-		const tempBash = await getDeepInterviewMutationDecision({
-			cwd,
-			sessionId: "session-a",
-			tool: tool("bash"),
-			args: { command: "cat draft.md > /tmp/deep-interview-final.md" },
-		});
-		expect(tempBash.blocked).toBe(false);
-	});
-
-	it("treats a heredoc delimiter as a here-doc word, not a path, so heredoc-to-temp is allowed", async () => {
-		const cwd = await makeTempRoot();
-		await writeActiveDeepInterview(cwd);
-
-		const heredocToTemp = await getDeepInterviewMutationDecision({
-			cwd,
-			sessionId: "session-a",
-			tool: tool("bash"),
-			args: { command: "cat <<EOF > /tmp/deep-interview-final.md\nspec body\nEOF" },
-		});
-		expect(heredocToTemp.blocked).toBe(false);
-
-		// The redirect target still governs: a heredoc into product code stays blocked.
-		const heredocToProduct = await getDeepInterviewMutationDecision({
-			cwd,
-			sessionId: "session-a",
-			tool: tool("bash"),
-			args: { command: "cat <<EOF > src/product.ts\nx\nEOF" },
-		});
-		expect(heredocToProduct.blocked).toBe(true);
-	});
-
 	it("keeps blocking ralplan at the pre-approval terminal phases (final, handoff)", async () => {
 		const cwd = await makeTempRoot();
 		for (const phase of ["final", "handoff"]) {
@@ -613,53 +569,25 @@ describe("deep-interview mutation guard", () => {
 		expect(decision.blocked).toBe(false);
 	});
 
-	it("blocks compound gjc bash that appends a product mutation or .gjc write", async () => {
+	it("never blocks bash during a planning phase, including compound/redirected/newline commands", async () => {
 		const cwd = await makeTempRoot();
 		await writeActiveSkill(cwd, "ralplan", "planner");
 
-		const compoundProduct = await getDeepInterviewMutationDecision({
-			cwd,
-			sessionId: "session-a",
-			tool: tool("bash"),
-			args: { command: "gjc ralplan --write --stage planner --artifact /tmp/p.md ; tee src/product.ts" },
-		});
-		expect(compoundProduct.blocked).toBe(true);
-
-		const compoundGjc = await getDeepInterviewMutationDecision({
-			cwd,
-			sessionId: "session-a",
-			tool: tool("bash"),
-			args: { command: "gjc state read && echo x > .gjc/state/foo.json" },
-		});
-		expect(compoundGjc.blocked).toBe(true);
-		expect(["gjc-target", "workflow-state-target"]).toContain(compoundGjc.reason ?? "");
-
-		// A newline is a shell command separator too: a second line must not be skipped.
-		const newlineProduct = await getDeepInterviewMutationDecision({
-			cwd,
-			sessionId: "session-a",
-			tool: tool("bash"),
-			args: { command: "gjc ralplan --write --stage planner --artifact /tmp/p.md\ntouch src/product.ts" },
-		});
-		expect(newlineProduct.blocked).toBe(true);
-
-		const newlineGjc = await getDeepInterviewMutationDecision({
-			cwd,
-			sessionId: "session-a",
-			tool: tool("bash"),
-			args: { command: "gjc state read\nrm .gjc/state/foo.json" },
-		});
-		expect(newlineGjc.blocked).toBe(true);
-		expect(["gjc-target", "workflow-state-target"]).toContain(newlineGjc.reason ?? "");
-
-		// A single, unredirected gjc command is still allowed.
-		const plainGjc = await getDeepInterviewMutationDecision({
-			cwd,
-			sessionId: "session-a",
-			tool: tool("bash"),
-			args: { command: "gjc ralplan --write --stage planner --artifact /tmp/p.md" },
-		});
-		expect(plainGjc.blocked).toBe(false);
+		for (const command of [
+			"gjc ralplan --write --stage planner --artifact /tmp/p.md ; tee src/product.ts",
+			"gjc state read && echo x > .gjc/state/foo.json",
+			"gjc ralplan --write --stage planner --artifact /tmp/p.md\ntouch src/product.ts",
+			"gjc state read\nrm .gjc/state/foo.json",
+			"gjc ralplan --write --stage planner --artifact /tmp/p.md",
+		]) {
+			const decision = await getDeepInterviewMutationDecision({
+				cwd,
+				sessionId: "session-a",
+				tool: tool("bash"),
+				args: { command },
+			});
+			expect(decision.blocked).toBe(false);
+		}
 	});
 
 	it("selects the most-recently-updated workflow skill when several are momentarily active", async () => {
