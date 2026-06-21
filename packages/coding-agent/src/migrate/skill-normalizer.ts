@@ -73,7 +73,8 @@ export function normalizeSkill(input: NormalizeSkillInput): NormalizedSkill {
 	}
 
 	const fm: Record<string, unknown> = { description, ...rest };
-	const yaml = YAML.stringify(fm).trimEnd();
+	// `null, 2` forces conventional block-style YAML instead of a single-line flow map.
+	const yaml = YAML.stringify(fm, null, 2).trimEnd();
 	const content = `---\n${yaml}\n---\n\n${body.trim()}\n`;
 
 	return { slug, content, warnings };

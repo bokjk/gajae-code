@@ -38,6 +38,9 @@ describe("claude-code adapter", () => {
 		expect(result.skillCandidates[0].content).toContain("description: does things");
 		// `name` is dropped so the loaded name comes from the slug directory.
 		expect(result.skillCandidates[0].content).not.toContain("name: My Skill");
+		// Frontmatter is conventional block YAML, not a single-line flow map.
+		expect(result.skillCandidates[0].content).toMatch(/^---\n(?:[^\n]*\n)*description: does things/m);
+		expect(result.skillCandidates[0].content).not.toContain("{description");
 	});
 
 	test("malformed mcp config yields failed_invalid_source", async () => {
