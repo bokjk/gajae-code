@@ -2843,6 +2843,33 @@ export async function recordUltragoalReviewBlockers(input: {
 	return plan;
 }
 
+export type UltragoalBlockerClassification = "human_blocked" | "resolvable";
+
+/**
+ * Record an audited blocker triage classification in the durable ledger. A
+ * `human_blocked` classification is the only thing that authorizes
+ * `goal({"op":"pause"})` while an Ultragoal run is active; `resolvable` is an
+ * audit note and never unblocks pause.
+ */
+export async function recordUltragoalBlockerClassification(input: {
+	cwd: string;
+	classification: UltragoalBlockerClassification;
+	evidence: string;
+	goalId?: string;
+}): Promise<UltragoalLedgerEvent> {
+	const evidence = input.evidence.trim();
+	if (!evidence) throw new Error("classify-blocker --evidence is required");
+	if (input.classification !== "human_blocked" && input.classification !== "resolvable") {
+		throw new Error('classify-blocker --classification must be "human_blocked" or "resolvable"');
+	}
+	return appendLedger(input.cwd, {
+		event: "blocker_classified",
+		classification: input.classification,
+		...(input.goalId?.trim() ? { goalId: input.goalId.trim() } : {}),
+		evidence,
+	});
+}
+
 type UltragoalReviewMode = "review-only" | "review-start";
 type UltragoalReviewContractStrength = "strong" | "thin-derived";
 
@@ -3235,6 +3262,7 @@ const FLAGS_WITH_VALUES = new Set([
 	"--rationale",
 	"--replacements-json",
 	"--order-json",
+	"--classification",
 ]);
 
 function isHelpArg(arg: string): boolean {
@@ -3643,6 +3671,24 @@ async function dispatchUltragoalCommand(args: string[], cwd: string): Promise<Ul
 						: "Recorded review blockers.\n",
 				};
 			}
+			case "classify-blocker": {
+				const event = await recordUltragoalBlockerClassification({
+					cwd,
+					classification: (flagValue(args, "--classification") ?? "") as UltragoalBlockerClassification,
+					evidence: flagValue(args, "--evidence") ?? "",
+					goalId: flagValue(args, "--goal-id"),
+				});
+				return {
+					status: 0,
+					stdout: json
+						? renderCliWriteReceipt({
+								ok: true,
+								event: "blocker_classified",
+								classification: event.classification,
+							})
+						: `Recorded blocker classification: ${String(event.classification)}.\n`,
+				};
+			}
 			default:
 				return { status: 1, stderr: `Unknown gjc ultragoal command: ${command}\n` };
 		}
@@ -3660,6 +3706,7 @@ const RECONCILE_COMMANDS = new Set([
 	"steer",
 	"record-review-blockers",
 	"review",
+	"classify-blocker",
 ]);
 
 /**
