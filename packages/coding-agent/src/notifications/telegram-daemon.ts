@@ -62,7 +62,11 @@ export interface TelegramDaemonDeps {
 	now?: () => number;
 	pid?: number;
 	pidAlive?: (pid: number) => boolean;
-	spawn?: (command: string, args: string[], opts: { detached: boolean; stdio: "ignore" }) => SpawnResult;
+	spawn?: (
+		command: string,
+		args: string[],
+		opts: { detached: boolean; stdio: "ignore"; logPath?: string },
+	) => SpawnResult;
 	execPath?: string;
 	randomId?: () => string;
 }
@@ -301,9 +305,21 @@ function defaultPidAlive(pid: number): boolean {
 function defaultDaemonSpawn(
 	command: string,
 	args: string[],
-	opts: { detached: boolean; stdio: "ignore" },
+	opts: { detached: boolean; stdio: "ignore"; logPath?: string },
 ): SpawnResult {
-	const child = childProcessSpawn(command, args, { detached: opts.detached, stdio: opts.stdio });
+	// Redirect the detached daemon's stdout/stderr to a log file so failures
+	// (e.g. a rejected sendMessage) are diagnosable instead of vanishing.
+	let stdio: "ignore" | ["ignore", number, number] = opts.stdio;
+	if (opts.logPath) {
+		try {
+			fs.mkdirSync(path.dirname(opts.logPath), { recursive: true, mode: 0o700 });
+			const fd = fs.openSync(opts.logPath, "a", 0o600);
+			stdio = ["ignore", fd, fd];
+		} catch {
+			// Fall back to ignoring output if the log file cannot be opened.
+		}
+	}
+	const child = childProcessSpawn(command, args, { detached: opts.detached, stdio });
 	// Best-effort autostart: a spawn failure must never crash the host session.
 	child.on("error", () => undefined);
 	return { unref: () => child.unref() };
@@ -345,7 +361,11 @@ export async function ensureTelegramDaemonRunning(
 		input.settings.getAgentDir(),
 	];
 	const spawnImpl = deps.spawn ?? defaultDaemonSpawn;
-	const child = spawnImpl(execPath, args, { detached: true, stdio: "ignore" });
+	const child = spawnImpl(execPath, args, {
+		detached: true,
+		stdio: "ignore",
+		logPath: path.join(daemonPaths(input.settings.getAgentDir()).dir, "daemon.log"),
+	});
 	child?.unref?.();
 	return "owner_spawned";
 }
@@ -470,7 +490,11 @@ export class TelegramNotificationDaemon {
 		const session: SessionSocket = { sessionId, token, ws, pending: new Map() };
 		this.sessions.set(sessionId, session);
 		ws.addEventListener("message", ev => {
-			void this.handleSessionMessage(session, JSON.parse(String(ev.data)));
+			void this.handleSessionMessage(session, JSON.parse(String(ev.data))).catch(err => {
+				// Surface frame-handling failures (e.g. a rejected ask sendMessage) to
+				// the daemon log instead of an invisible unhandled rejection.
+				console.error("notifications daemon: handleSessionMessage failed:", err);
+			});
 		});
 		ws.addEventListener("close", () => {
 			this.sessions.delete(sessionId);
