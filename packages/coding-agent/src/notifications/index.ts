@@ -36,12 +36,7 @@ import {
 	type NotificationConfig,
 	sessionTag,
 } from "./config";
-import {
-	imageAttachmentsFromMessage,
-	notificationActionPayload,
-	summaryFromMessage,
-
-} from "./helpers";
+import { imageAttachmentsFromMessage, notificationActionPayload, summaryFromMessage } from "./helpers";
 import { ensureTelegramDaemonRunning } from "./telegram-daemon";
 
 /** Resolve the git dir for `cwd`, handling worktrees where `.git` is a file. */
@@ -71,6 +66,30 @@ function readGitBranch(cwd: string): string | undefined {
 	}
 }
 
+/** Resolve the shared git dir (the main repo's `.git`) for a possibly-linked worktree. */
+function gitCommonDir(gd: string): string {
+	try {
+		const raw = fs.readFileSync(path.join(gd, "commondir"), "utf8").trim();
+		if (raw) return path.resolve(gd, raw);
+	} catch {}
+	return gd;
+}
+
+/**
+ * Best-effort real repository name (no git spawn): resolves the main worktree
+ * root directory so linked worktrees report the repo (e.g. `gajae-code`)
+ * instead of the worktree directory (e.g. `feat-foo-01047f11`).
+ */
+export function readGitRepoName(cwd: string): string | undefined {
+	const gd = gitDir(cwd);
+	if (!gd) return undefined;
+	const commonDir = gitCommonDir(gd);
+	// Strip the trailing `.git` to land on the main worktree root directory.
+	const repoRoot = path.basename(commonDir) === ".git" ? path.dirname(commonDir) : commonDir;
+	const name = path.basename(repoRoot);
+	return name && name !== ".git" ? name : undefined;
+}
+
 /** Build the one-time identity header fields for a session thread. */
 function buildIdentity(
 	cwd: string,
@@ -81,7 +100,7 @@ function buildIdentity(
 	machine: string;
 	title: string;
 } {
-	const repo = path.basename(cwd) || cwd;
+	const repo = readGitRepoName(cwd) ?? (path.basename(cwd) || cwd);
 	const branch = readGitBranch(cwd) ?? "(detached)";
 	// Topic title: "{repo}/{branch}" before the session title is auto-generated,
 	// then "{repo}/{branch} - {session title}" once it exists.

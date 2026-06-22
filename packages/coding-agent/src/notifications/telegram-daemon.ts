@@ -485,8 +485,12 @@ export class TelegramNotificationDaemon {
 		"config_update",
 	]);
 
-	private topicNameFor(sessionId: string, msg: { title?: unknown }): string {
-		return typeof msg?.title === "string" && msg.title ? msg.title : `GJC ${sessionId.slice(-6)}`;
+	private topicNameFor(sessionId: string, msg: { title?: unknown; repo?: unknown; branch?: unknown }): string {
+		if (typeof msg?.title === "string" && msg.title) return msg.title;
+		const repo = typeof msg?.repo === "string" && msg.repo ? msg.repo : undefined;
+		const branch = typeof msg?.branch === "string" && msg.branch ? msg.branch : undefined;
+		if (repo) return branch ? `${repo}/${branch}` : repo;
+		return `GJC ${sessionId.slice(-6)}`;
 	}
 
 	/**
@@ -632,7 +636,7 @@ export class TelegramNotificationDaemon {
 		}
 		if (msg.type === "action_needed" && msg.id) {
 			if (msg.kind === "ask") session.pending.set(msg.id, { sessionId: session.sessionId, actionId: msg.id });
-			const topicId = await this.ensureTopic(session.sessionId, `GJC ${session.sessionId.slice(-6)}`);
+			const topicId = await this.ensureTopic(session.sessionId, this.topicNameFor(session.sessionId, msg));
 			if (!topicId) return;
 			const rendered = buildActionMessage({
 				kind: msg.kind ?? "ask",
@@ -700,8 +704,7 @@ export class TelegramNotificationDaemon {
 		// free-text injection. Previously replies bypassed injection entirely.
 		const replyTo = raw.message?.reply_to_message?.message_id;
 		const isAskReply =
-			replyTo !== undefined &&
-			(this.messageRoutes.has(String(replyTo)) || this.messageRoutes.has(Number(replyTo)));
+			replyTo !== undefined && (this.messageRoutes.has(String(replyTo)) || this.messageRoutes.has(Number(replyTo)));
 		if (!raw.callback_query && !isAskReply) {
 			const inbound = decideThreadedInbound(update as never, {
 				pairedChatId: this.opts.chatId,
