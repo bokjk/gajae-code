@@ -15,13 +15,7 @@
  */
 
 import * as fs from "node:fs";
-import {
-	bold,
-	buildButtonGrid,
-	escapeHtml,
-	TELEGRAM_PARSE_MODE,
-	truncateTelegramHtml,
-} from "./html-format";
+import { bold, buildButtonGrid, escapeHtml, TELEGRAM_PARSE_MODE, truncateTelegramHtml } from "./html-format";
 import { renderThreadedFrame } from "./threaded-render";
 
 /** One inline-keyboard button. */

@@ -11,8 +11,8 @@ import {
 	TELEGRAM_PARSE_MODE,
 	truncateTelegramHtml,
 } from "../src/notifications/html-format";
-import { buildActionMessage } from "../src/notifications/telegram-reference";
 import { TelegramNotificationDaemon } from "../src/notifications/telegram-daemon";
+import { buildActionMessage } from "../src/notifications/telegram-reference";
 import { formatIdentityHeader, renderThreadedFrame } from "../src/notifications/threaded-render";
 
 describe("escapeHtml (AC2)", () => {
@@ -29,7 +29,7 @@ describe("markdownToTelegramHtml (AC5)", () => {
 	});
 
 	test("inline and fenced code escape their contents and are not re-parsed", () => {
-		expect(markdownToTelegramHtml("`a<b>`" )).toBe("<code>a&lt;b&gt;</code>");
+		expect(markdownToTelegramHtml("`a<b>`")).toBe("<code>a&lt;b&gt;</code>");
 		expect(markdownToTelegramHtml("```ts\nconst x = a < b && c > d;\n```")).toBe(
 			"<pre>const x = a &lt; b &amp;&amp; c &gt; d;\n</pre>",
 		);
@@ -136,7 +136,12 @@ describe("threaded-render HTML treatment (AC3/AC5)", () => {
 	});
 
 	test("turn_stream converts markdown to Telegram HTML", () => {
-		const send = renderThreadedFrame({ type: "turn_stream", sessionId: "s", phase: "finalized", text: "**bold** and `code`" });
+		const send = renderThreadedFrame({
+			type: "turn_stream",
+			sessionId: "s",
+			phase: "finalized",
+			text: "**bold** and `code`",
+		});
 		expect(send?.text).toBe("<b>bold</b> and <code>code</code>");
 	});
 });
@@ -221,7 +226,9 @@ describe("daemon send sites force parse_mode HTML (AC1)", () => {
 		});
 		const send = bot.calls.find(c => c.method === "sendMessage");
 		expect(send?.body.parse_mode).toBe(TELEGRAM_PARSE_MODE);
-		const keyboard = send?.body.reply_markup?.inline_keyboard as Array<Array<{ text: string; callback_data: string }>>;
+		const keyboard = send?.body.reply_markup?.inline_keyboard as Array<
+			Array<{ text: string; callback_data: string }>
+		>;
 		expect(keyboard[0]?.[0]?.text).toBe("1. Yes");
 		// The first button's alias must resolve to zero-based answer 0.
 		const alias = keyboard[0]?.[0]?.callback_data as string;

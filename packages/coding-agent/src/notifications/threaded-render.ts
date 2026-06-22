@@ -10,15 +10,7 @@
  */
 
 import { truncate } from "./helpers";
-import {
-	bold,
-	code,
-	escapeHtml,
-	finalizeTelegramHtml,
-	italic,
-	markdownToTelegramHtml,
-	pre,
-} from "./html-format";
+import { bold, code, escapeHtml, finalizeTelegramHtml, italic, markdownToTelegramHtml, pre } from "./html-format";
 import type { RateLimitLane } from "./rate-limit-pool";
 
 /** A Telegram send derived from a threaded frame (topic id is applied by the daemon). */

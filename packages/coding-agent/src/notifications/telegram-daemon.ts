@@ -5,8 +5,8 @@ import { withFileLock } from "../config/file-lock";
 import type { Settings } from "../config/settings";
 import { getNotificationConfig, isGloballyConfigured, tokenFingerprint } from "./config";
 import { parseInThreadConfigCommand } from "./config-commands";
-import { RateLimitPool } from "./rate-limit-pool";
 import { buildButtonGrid, TELEGRAM_PARSE_MODE } from "./html-format";
+import { RateLimitPool } from "./rate-limit-pool";
 import {
 	type AliasTable,
 	buildActionMessage,

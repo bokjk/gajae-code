@@ -106,7 +106,10 @@ export function markdownToTelegramHtml(markdown: string): string {
 	for (const line of lines) {
 		const quote = /^&gt;\s?(.*)$/.exec(line);
 		if (quote) {
-			(quoteBuffer ??= []).push(quote[1] ?? "");
+			if (!quoteBuffer) {
+				quoteBuffer = [];
+			}
+			quoteBuffer.push(quote[1] ?? "");
 			continue;
 		}
 		flushQuote();
@@ -121,8 +124,9 @@ export function markdownToTelegramHtml(markdown: string): string {
 	text = text.replace(/\*([^*\n]+)\*/g, (_m, body: string) => tag("i", body));
 
 	// 7. Restore protected placeholders.
-	text = text.replace(new RegExp(`${PLACEHOLDER_PREFIX}(\\d+)${PLACEHOLDER_SUFFIX}`, "g"), (_m, i: string) =>
-		placeholders[Number(i)] ?? "",
+	text = text.replace(
+		new RegExp(`${PLACEHOLDER_PREFIX}(\\d+)${PLACEHOLDER_SUFFIX}`, "g"),
+		(_m, i: string) => placeholders[Number(i)] ?? "",
 	);
 
 	return text;
@@ -150,7 +154,8 @@ function tokenize(html: string): Token[] {
 				const openMatch = /^<([a-z-]+)(?:\s[^>]*)?>$/i.exec(raw);
 				const token: Token = { value: raw };
 				if (close && ALLOWED_TAGS.has(close[1]!.toLowerCase())) token.close = close[1]!.toLowerCase();
-				else if (openMatch && ALLOWED_TAGS.has(openMatch[1]!.toLowerCase())) token.open = openMatch[1]!.toLowerCase();
+				else if (openMatch && ALLOWED_TAGS.has(openMatch[1]!.toLowerCase()))
+					token.open = openMatch[1]!.toLowerCase();
 				tokens.push(token);
 				i = end + 1;
 				continue;
@@ -175,11 +180,7 @@ function tokenize(html: string): Token[] {
  * splitting a tag or entity, closing any still-open allowed tags and appending
  * `marker`. The final string is guaranteed to be <= `max`.
  */
-export function truncateTelegramHtml(
-	message: string,
-	max = TELEGRAM_MESSAGE_LIMIT,
-	marker = "… [truncated]",
-): string {
+export function truncateTelegramHtml(message: string, max = TELEGRAM_MESSAGE_LIMIT, marker = "… [truncated]"): string {
 	if (message.length <= max) return message;
 
 	// When `max` is too small to even hold the marker, drop it so the hard
@@ -190,7 +191,11 @@ export function truncateTelegramHtml(
 	const stack: string[] = [];
 	let out = "";
 
-	const closersFor = (s: string[]): string => s.map(t => `</${t}>`).reverse().join("");
+	const closersFor = (s: string[]): string =>
+		s
+			.map(t => `</${t}>`)
+			.reverse()
+			.join("");
 
 	for (const token of tokens) {
 		// Simulate accepting this token, then ensure we can still close + mark.
@@ -240,10 +245,7 @@ function isLongLabel(label: string): boolean {
  * callback value comes from `callbackForIndex(i)` using the original zero-based
  * option index — layout never changes callback semantics.
  */
-export function buildButtonGrid(
-	labels: string[],
-	callbackForIndex: (index: number) => string,
-): InlineButton[][] {
+export function buildButtonGrid(labels: string[], callbackForIndex: (index: number) => string): InlineButton[][] {
 	const rows: InlineButton[][] = [];
 	let run: InlineButton[] = [];
 	const flush = () => {

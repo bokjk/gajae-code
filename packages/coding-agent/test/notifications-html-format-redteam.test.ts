@@ -1,9 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import {
-	finalizeTelegramHtml,
-	markdownToTelegramHtml,
-	truncateTelegramHtml,
-} from "../src/notifications/html-format";
+import { finalizeTelegramHtml, markdownToTelegramHtml, truncateTelegramHtml } from "../src/notifications/html-format";
 
 const allowedTags = new Set(["b", "i", "u", "s", "code", "pre", "a", "blockquote", "tg-spoiler"]);
 const allowedTagPattern = /<\/?(?:b|i|u|s|code|pre|blockquote|tg-spoiler)>|<a\s+href="[^"]*">|<\/a>/gi;
@@ -36,8 +32,8 @@ function randomString(seed: number): string {
 		"[ok](https://example.com/a?b=1&c=2)",
 		"```ts\nconst x = '<tag>';&amp;\n```",
 		"a".repeat(256),
-		"<unterminated" + "x".repeat(32),
-		"&amp" + "x".repeat(32),
+		`<unterminated${"x".repeat(32)}`,
+		`&amp${"x".repeat(32)}`,
 		"plain text ",
 	];
 	const pieces: string[] = [];
@@ -116,10 +112,7 @@ describe("red-team truncateTelegramHtml properties", () => {
 		for (let seed = 1; seed <= 520; seed++) {
 			const sample = randomString(seed);
 			for (const max of maxValues) {
-				expect(
-					truncateTelegramHtml(sample, max).length,
-					`seed=${seed} max=${max}`,
-				).toBeLessThanOrEqual(max);
+				expect(truncateTelegramHtml(sample, max).length, `seed=${seed} max=${max}`).toBeLessThanOrEqual(max);
 			}
 		}
 	});
@@ -169,7 +162,8 @@ describe("red-team adversarial markdown balance", () => {
 
 describe("red-team huge turn_stream-like input", () => {
 	test("50k-char markdown converts and finalizes to Telegram limit", () => {
-		const chunk = "# Heading <unsafe> & stuff\n> quoted **bold** `code <x>` [bad](javascript:1) [ok](https://example.com?a=1&b=2)\n";
+		const chunk =
+			"# Heading <unsafe> & stuff\n> quoted **bold** `code <x>` [bad](javascript:1) [ok](https://example.com?a=1&b=2)\n";
 		const huge = chunk.repeat(Math.ceil(50_000 / chunk.length)).slice(0, 50_000);
 		const finalized = finalizeTelegramHtml(markdownToTelegramHtml(huge));
 		expect(finalized).toBeDefined();
