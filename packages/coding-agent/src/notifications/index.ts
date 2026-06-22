@@ -72,7 +72,10 @@ function readGitBranch(cwd: string): string | undefined {
 }
 
 /** Build the one-time identity header fields for a session thread. */
-function buildIdentity(cwd: string): {
+function buildIdentity(
+	cwd: string,
+	sessionName?: string,
+): {
 	repo: string;
 	branch: string;
 	machine: string;
@@ -80,7 +83,11 @@ function buildIdentity(cwd: string): {
 } {
 	const repo = path.basename(cwd) || cwd;
 	const branch = readGitBranch(cwd) ?? "(detached)";
-	return { repo, branch, machine: os.hostname(), title: `${repo} · ${branch}` };
+	// Topic title: "{repo}/{branch}" before the session title is auto-generated,
+	// then "{repo}/{branch} - {session title}" once it exists.
+	const base = `${repo}/${branch}`;
+	const title = sessionName ? `${base} - ${sessionName}` : base;
+	return { repo, branch, machine: os.hostname(), title };
 }
 
 const execFileAsync = promisify(execFile);
@@ -356,7 +363,13 @@ export const createNotificationsExtension: ExtensionFactory = api => {
 			// One-time identity header (repo/branch/machine/session) pinned at the top
 			// of the session thread by the daemon.
 			try {
-				server.pushFrame(JSON.stringify({ type: "identity_header", sessionId: id, ...buildIdentity(ctx.cwd) }));
+				server.pushFrame(
+					JSON.stringify({
+						type: "identity_header",
+						sessionId: id,
+						...buildIdentity(ctx.cwd, ctx.sessionManager.getSessionName()),
+					}),
+				);
 			} catch (e) {
 				logger.warn(`notifications: identity_header failed: ${String(e)}`);
 			}
@@ -475,6 +488,18 @@ export const createNotificationsExtension: ExtensionFactory = api => {
 		const rt = runtimes.get(id);
 		if (!rt) return;
 		const seq = rt.idleSeq++;
+		// Re-assert the identity header so the daemon renames the topic once the
+		// session title has been auto-generated ("{repo}/{branch} - {title}"). The
+		// daemon only renames when the title actually changed.
+		try {
+			rt.server.pushFrame(
+				JSON.stringify({
+					type: "identity_header",
+					sessionId: id,
+					...buildIdentity(ctx.cwd, ctx.sessionManager.getSessionName()),
+				}),
+			);
+		} catch {}
 		try {
 			rt.server.noteIdle(
 				JSON.stringify(

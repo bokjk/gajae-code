@@ -511,6 +511,7 @@ export class TelegramNotificationDaemon {
 				},
 				this.opts.now,
 			);
+			this.topics.applyName(sessionId, name);
 			await this.persistTopics();
 			return rec.topicId;
 		} catch {
@@ -598,6 +599,20 @@ export class TelegramNotificationDaemon {
 			});
 			await this.flushPool();
 			if (send.identity) {
+				// Rename the topic if the title changed (e.g. the session title was
+				// auto-generated after the topic was first created).
+				const name = this.topicNameFor(session.sessionId, msg);
+				if (this.topics.applyName(session.sessionId, name)) {
+					try {
+						await this.botApi.call("editForumTopic", {
+							chat_id: this.opts.chatId,
+							message_thread_id: Number(topicId),
+							name,
+						});
+					} catch {
+						// Best-effort rename; never block delivery.
+					}
+				}
 				this.topics.markIdentitySent(session.sessionId);
 				await this.persistTopics();
 			}
@@ -666,9 +681,16 @@ export class TelegramNotificationDaemon {
 		// update_id dedupe are all enforced by decideThreadedInbound.
 		const raw = update as {
 			callback_query?: unknown;
-			message?: { reply_to_message?: unknown };
+			message?: { reply_to_message?: { message_id?: unknown } };
 		};
-		if (!raw.callback_query && !raw.message?.reply_to_message) {
+		// A reply to a known ask message routes to that ask (below). Any OTHER
+		// message in a topic (plain text, or a reply to a non-ask message) is a
+		// free-text injection. Previously replies bypassed injection entirely.
+		const replyTo = raw.message?.reply_to_message?.message_id;
+		const isAskReply =
+			replyTo !== undefined &&
+			(this.messageRoutes.has(String(replyTo)) || this.messageRoutes.has(Number(replyTo)));
+		if (!raw.callback_query && !isAskReply) {
 			const inbound = decideThreadedInbound(update as never, {
 				pairedChatId: this.opts.chatId,
 				topicToSession: t => this.topics.sessionForTopic(t),
