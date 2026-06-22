@@ -14,7 +14,7 @@ import {
 	resolveRlmArtifactPaths,
 } from "@gajae-code/coding-agent/rlm/artifacts";
 import { loadRlmDataContext } from "@gajae-code/coding-agent/rlm/data-context";
-import { buildRlmGoalObjective, createRlmPreset } from "@gajae-code/coding-agent/rlm/index";
+import { buildRlmGoalObjective, createRlmPreset, ensureRlmGjcSessionId } from "@gajae-code/coding-agent/rlm/index";
 import { RlmNotebookWriter } from "@gajae-code/coding-agent/rlm/notebook";
 import {
 	assertRlmToolAllowlist,
@@ -85,6 +85,53 @@ describe("rlm artifacts", () => {
 	});
 	test("rejects invalid session ids when resolving paths", () => {
 		expect(() => resolveRlmArtifactPaths(tmp, "../escape")).toThrow();
+	});
+});
+
+describe("rlm gjc session resolution (regression: standalone `gjc rlm`)", () => {
+	let priorSessionId: string | undefined;
+
+	beforeEach(() => {
+		priorSessionId = process.env.GJC_SESSION_ID;
+	});
+
+	afterEach(() => {
+		if (priorSessionId !== undefined) process.env.GJC_SESSION_ID = priorSessionId;
+		else delete process.env.GJC_SESSION_ID;
+	});
+
+	// Regression for `gjc rlm "..."` crashing with
+	// `SessionResolutionError: a session id is required to write state` when no
+	// GJC session is established (no parent agent / GJC_SESSION_ID unset).
+	test("resolveRlmArtifactPaths throws missing_for_write when no session is set", () => {
+		delete process.env.GJC_SESSION_ID;
+		expect(() => resolveRlmArtifactPaths(tmp, "sess1")).toThrow(/session id is required to write state/);
+	});
+
+	test("ensureRlmGjcSessionId generates and pins a session id when none is set", () => {
+		delete process.env.GJC_SESSION_ID;
+		const resolved = ensureRlmGjcSessionId();
+		expect(resolved.startsWith("rlm-")).toBe(true);
+		expect(isValidRlmSessionId(resolved)).toBe(true);
+		expect(process.env.GJC_SESSION_ID).toBe(resolved);
+		// After establishing the session, artifact-path resolution no longer throws.
+		const paths = resolveRlmArtifactPaths(tmp, "sess1");
+		expect(paths.dir).toBe(rlmArtifactRoot(tmp, resolved, "sess1"));
+	});
+
+	test("ensureRlmGjcSessionId treats a blank session id as unset", () => {
+		process.env.GJC_SESSION_ID = "   ";
+		const resolved = ensureRlmGjcSessionId();
+		expect(resolved.startsWith("rlm-")).toBe(true);
+		expect(process.env.GJC_SESSION_ID).toBe(resolved);
+	});
+
+	test("ensureRlmGjcSessionId preserves an existing session id", () => {
+		process.env.GJC_SESSION_ID = "parent-session";
+		const resolved = ensureRlmGjcSessionId();
+		expect(resolved).toBe("parent-session");
+		expect(process.env.GJC_SESSION_ID).toBe("parent-session");
+		expect(resolveRlmArtifactPaths(tmp, "sess1").dir).toBe(rlmArtifactRoot(tmp, "parent-session", "sess1"));
 	});
 });
 

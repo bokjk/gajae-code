@@ -240,8 +240,27 @@ async function writeRlmMetadata(input: {
 	}
 }
 
+/**
+ * RLM artifacts are scoped under a GJC session directory and resolving their
+ * paths is a *write* (it must pick a concrete session). When `gjc rlm` runs
+ * standalone — no parent agent, no `GJC_SESSION_ID` in the environment — there is
+ * no session to resolve and `resolveGjcSessionForWrite` throws
+ * `missing_for_write`. Establish a dedicated GJC session id in that case and pin
+ * it into the environment so artifact-path resolution, the per-session activity
+ * marker, and the child agent's workflow state all share one writable session.
+ *
+ * Returns the resolved (existing or freshly generated) GJC session id.
+ */
+export function ensureRlmGjcSessionId(): string {
+	const existing = resolveSessionIdFromSources({ envSessionId: process.env.GJC_SESSION_ID })?.gjcSessionId;
+	if (existing) return existing;
+	const generated = `rlm-${generateRlmSessionId()}`;
+	process.env.GJC_SESSION_ID = generated;
+	return generated;
+}
 export async function runRlmCommand(argv: string[]): Promise<void> {
 	const cwd = getProjectDir();
+	ensureRlmGjcSessionId();
 	const { dataPath, resumeSessionId, minSuccessfulRuns, rest } = extractRlmFlags(argv);
 	const dataContext = await loadRlmDataContext(cwd, dataPath);
 
