@@ -669,11 +669,14 @@ export const createNotificationsExtension: ExtensionFactory = api => {
 		const id = sessionId(ctx);
 		const rt = runtimes.get(id);
 		if (!rt || rt.redact) return;
-		// Capture the in-flight assistant text here (message_end is on the awaited
+		// Capture the in-flight ASSISTANT text here (message_end is on the awaited
 		// extension path and ordered before tool_execution_start) so the pre-ask
-		// flush can emit it before the ask prompt.
-		const turnText = summaryFromMessage(event.message, 3500);
-		if (turnText) rt.currentTurnText = turnText;
+		// flush can emit it before the ask prompt. Role-scoped: message_end also
+		// fires for the user prompt, which must never be mirrored back as turn output.
+		if ((event.message as { role?: unknown }).role === "assistant") {
+			const turnText = summaryFromMessage(event.message, 3500);
+			if (turnText) rt.currentTurnText = turnText;
+		}
 		for (const img of imageAttachmentsFromMessage(event.message)) {
 			try {
 				rt.server.pushFrame(
