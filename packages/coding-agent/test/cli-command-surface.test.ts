@@ -30,6 +30,7 @@ describe("GJC public CLI command surface", () => {
 			"ralplan",
 			"config",
 			"notify",
+			"daemon",
 			"web-search",
 			"mcp-serve",
 			"contribute-pr",
