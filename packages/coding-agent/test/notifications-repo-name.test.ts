@@ -40,6 +40,21 @@ test("readGitRepoName resolves the main repo for a linked worktree (not the work
 	expect(readGitRepoName(worktree)).toBe("gajae-code");
 });
 
+test("readGitRepoName returns undefined for a worktree with corrupt metadata (no commondir)", () => {
+	const root = mkdtemp();
+	const repo = path.join(root, "gajae-code");
+	const wtGit = path.join(repo, ".git", "worktrees", "feat-foo-01047f11");
+	fs.mkdirSync(wtGit, { recursive: true });
+	// Intentionally omit the `commondir` file to simulate corrupt metadata.
+
+	const worktree = path.join(root, "worktrees", "feat-foo-01047f11");
+	fs.mkdirSync(worktree, { recursive: true });
+	fs.writeFileSync(path.join(worktree, ".git"), `gitdir: ${wtGit}\n`);
+
+	// Must not report the worktree metadata directory name as the repo.
+	expect(readGitRepoName(worktree)).toBeUndefined();
+});
+
 test("readGitRepoName returns undefined outside a git repo", () => {
 	const root = mkdtemp();
 	expect(readGitRepoName(root)).toBeUndefined();

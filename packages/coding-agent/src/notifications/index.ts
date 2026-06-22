@@ -84,9 +84,11 @@ export function readGitRepoName(cwd: string): string | undefined {
 	const gd = gitDir(cwd);
 	if (!gd) return undefined;
 	const commonDir = gitCommonDir(gd);
-	// Strip the trailing `.git` to land on the main worktree root directory.
-	const repoRoot = path.basename(commonDir) === ".git" ? path.dirname(commonDir) : commonDir;
-	const name = path.basename(repoRoot);
+	// The shared git dir is the main repo's `.git`; its parent is the repo root.
+	// If we can't land on a real `.git` dir (e.g. corrupt worktree metadata with
+	// no `commondir`), return undefined rather than reporting a metadata dir name.
+	if (path.basename(commonDir) !== ".git") return undefined;
+	const name = path.basename(path.dirname(commonDir));
 	return name && name !== ".git" ? name : undefined;
 }
 
