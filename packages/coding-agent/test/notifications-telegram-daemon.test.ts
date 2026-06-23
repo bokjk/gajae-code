@@ -80,6 +80,7 @@ class FakeBotApi {
 			this.updates = [];
 			return { ok: true, result };
 		}
+		if (method === "getFile") return { ok: true, result: { file_path: "docs/file_7.bin" } };
 		if (method === "createForumTopic") return { ok: true, result: { message_thread_id: this.calls.length } };
 		if (method === "sendMessage") return { ok: true, result: { message_id: this.calls.length } };
 		return { ok: true, result: true };
@@ -1186,6 +1187,226 @@ test("inbound thread message gets a queued reaction, flipped to consumed on ack"
 	expect(consumed).toBeTruthy();
 	expect(consumed!.body.message_id).toBe(555);
 	expect(consumed!.body.reaction[0].emoji).toBe("✅");
+});
+
+test("inbound photo is downloaded and forwarded as an image in the user_message", async () => {
+	FakeWs.instances = [];
+	const agentDir = tempAgentDir();
+	const bot = new FakeBotApi();
+	const fetchImpl = (async () => ({
+		ok: true,
+		arrayBuffer: async () => new Uint8Array([1, 2, 3, 4]).buffer,
+	})) as unknown as typeof fetch;
+	const daemon = new TelegramNotificationDaemon({
+		settings: settings(agentDir),
+		ownerId: "owner",
+		botToken: "tok",
+		chatId: "42",
+		botApi: bot,
+		fetchImpl,
+		WebSocketImpl: FakeWs as any,
+	});
+	daemon.connectSession("S", "ws://s", "ts");
+	const session = daemon.sessions.get("S")!;
+	await daemon.handleSessionMessage(session, { type: "identity_header", sessionId: "S", repo: "r", branch: "b" });
+	const threadId = bot.calls.find(c => c.method === "sendMessage")!.body.message_thread_id;
+
+	await daemon.handleTelegramUpdate({
+		update_id: 11,
+		message: {
+			chat: { id: 42 },
+			message_thread_id: threadId,
+			message_id: 100,
+			photo: [{ file_id: "small" }, { file_id: "large" }],
+		},
+	});
+
+	const frame = JSON.parse(FakeWs.instances[0]!.sent[0]!);
+	expect(frame.type).toBe("user_message");
+	expect(frame.images).toHaveLength(1);
+	expect(frame.images[0].mime).toBe("image/jpeg");
+	expect(Buffer.from(frame.images[0].data, "base64")).toEqual(Buffer.from([1, 2, 3, 4]));
+	// The largest photo size is the one resolved/downloaded.
+	expect(bot.calls.some(c => c.method === "getFile" && c.body.file_id === "large")).toBe(true);
+});
+
+test("inbound document is saved to a tmp file and its path injected into the text", async () => {
+	FakeWs.instances = [];
+	const agentDir = tempAgentDir();
+	const bot = new FakeBotApi();
+	const fetchImpl = (async () => ({
+		ok: true,
+		arrayBuffer: async () => new Uint8Array([9, 9, 9]).buffer,
+	})) as unknown as typeof fetch;
+	const daemon = new TelegramNotificationDaemon({
+		settings: settings(agentDir),
+		ownerId: "owner",
+		botToken: "tok",
+		chatId: "42",
+		botApi: bot,
+		fetchImpl,
+		WebSocketImpl: FakeWs as any,
+	});
+	daemon.connectSession("S", "ws://s", "ts");
+	const session = daemon.sessions.get("S")!;
+	await daemon.handleSessionMessage(session, { type: "identity_header", sessionId: "S", repo: "r", branch: "b" });
+	const threadId = bot.calls.find(c => c.method === "sendMessage")!.body.message_thread_id;
+
+	await daemon.handleTelegramUpdate({
+		update_id: 12,
+		message: {
+			chat: { id: 42 },
+			message_thread_id: threadId,
+			message_id: 101,
+			caption: "look",
+			document: { file_id: "doc-1", mime_type: "application/pdf", file_name: "report.pdf" },
+		},
+	});
+
+	const frame = JSON.parse(FakeWs.instances[0]!.sent[0]!);
+	expect(frame.type).toBe("user_message");
+	expect(frame.images).toHaveLength(0);
+	expect(frame.text).toContain("look");
+	const match = String(frame.text).match(/saved to (\S+report\.pdf)/);
+	expect(match).toBeTruthy();
+	expect(fs.existsSync(match![1]!)).toBe(true);
+	expect(fs.readFileSync(match![1]!)).toEqual(Buffer.from([9, 9, 9]));
+	// Security: the saved file must be private (0600, no group/other access) inside
+	// a private 0700 per-session directory under the system temp root — not a
+	// predictable, world-readable /tmp path.
+	const dest = match![1]!;
+	const fileMode = fs.statSync(dest).mode & 0o777;
+	const dirMode = fs.statSync(path.dirname(dest)).mode & 0o777;
+	expect(fileMode).toBe(0o600);
+	expect(fileMode & 0o077).toBe(0);
+	expect(dirMode & 0o077).toBe(0);
+	expect(dest.startsWith(os.tmpdir())).toBe(true);
+});
+
+test("inbound document with a path-traversal filename stays sandboxed in the private temp dir", async () => {
+	FakeWs.instances = [];
+	const agentDir = tempAgentDir();
+	const bot = new FakeBotApi();
+	const fetchImpl = (async () => ({
+		ok: true,
+		arrayBuffer: async () => new Uint8Array([7]).buffer,
+	})) as unknown as typeof fetch;
+	const daemon = new TelegramNotificationDaemon({
+		settings: settings(agentDir),
+		ownerId: "owner",
+		botToken: "tok",
+		chatId: "42",
+		botApi: bot,
+		fetchImpl,
+		WebSocketImpl: FakeWs as any,
+	});
+	daemon.connectSession("S", "ws://s", "ts");
+	const session = daemon.sessions.get("S")!;
+	await daemon.handleSessionMessage(session, { type: "identity_header", sessionId: "S", repo: "r", branch: "b" });
+	const threadId = bot.calls.find(c => c.method === "sendMessage")!.body.message_thread_id;
+
+	await daemon.handleTelegramUpdate({
+		update_id: 21,
+		message: {
+			chat: { id: 42 },
+			message_thread_id: threadId,
+			message_id: 200,
+			document: { file_id: "doc-evil", mime_type: "application/octet-stream", file_name: "../../../etc/passwd" },
+		},
+	});
+
+	const frame = JSON.parse(FakeWs.instances[0]!.sent[0]!);
+	const match = String(frame.text).match(/saved to (\S+)/);
+	expect(match).toBeTruthy();
+	const dest = match![1]!;
+	const base = path.basename(dest);
+	const dir = path.dirname(dest);
+	// The attacker-controlled name must be sanitized so it cannot traverse:
+	// no path separators and no ".." segments survive.
+	expect(base.includes("/")).toBe(false);
+	expect(base.includes("\\")).toBe(false);
+	expect(base).not.toContain("..");
+	// The real saved file lives directly inside the private per-session temp dir
+	// (under the system temp root), not at the attacker-referenced location.
+	expect(path.dirname(fs.realpathSync(dest))).toBe(fs.realpathSync(dir));
+	expect(dir.startsWith(os.tmpdir())).toBe(true);
+	expect(fs.realpathSync(dest)).not.toBe("/etc/passwd");
+});
+
+test("daemon attachment temp dirs are removed by the shutdown cleanup path", async () => {
+	FakeWs.instances = [];
+	const agentDir = tempAgentDir();
+	const bot = new FakeBotApi();
+	const fetchImpl = (async () => ({
+		ok: true,
+		arrayBuffer: async () => new Uint8Array([1, 1]).buffer,
+	})) as unknown as typeof fetch;
+	const daemon = new TelegramNotificationDaemon({
+		settings: settings(agentDir),
+		ownerId: "owner",
+		botToken: "tok",
+		chatId: "42",
+		botApi: bot,
+		fetchImpl,
+		WebSocketImpl: FakeWs as any,
+	});
+	daemon.connectSession("S", "ws://s", "ts");
+	const session = daemon.sessions.get("S")!;
+	await daemon.handleSessionMessage(session, { type: "identity_header", sessionId: "S", repo: "r", branch: "b" });
+	const threadId = bot.calls.find(c => c.method === "sendMessage")!.body.message_thread_id;
+
+	await daemon.handleTelegramUpdate({
+		update_id: 22,
+		message: {
+			chat: { id: 42 },
+			message_thread_id: threadId,
+			message_id: 201,
+			document: { file_id: "doc-x", mime_type: "application/pdf", file_name: "keep.pdf" },
+		},
+	});
+
+	const frame = JSON.parse(FakeWs.instances[0]!.sent[0]!);
+	const dir = path.dirname(String(frame.text).match(/saved to (\S+)/)![1]!);
+	expect(fs.existsSync(dir)).toBe(true);
+	// run()'s `finally` invokes cleanupAllAttachmentDirs() on daemon shutdown;
+	// exercise that exact cleanup path here.
+	await (daemon as any).cleanupAllAttachmentDirs();
+	expect(fs.existsSync(dir)).toBe(false);
+});
+
+test("outbound file_attachment frame triggers a sendDocument upload to the topic", async () => {
+	FakeWs.instances = [];
+	const agentDir = tempAgentDir();
+	const bot = new FakeBotApi();
+	const daemon = new TelegramNotificationDaemon({
+		settings: settings(agentDir),
+		ownerId: "owner",
+		botToken: "tok",
+		chatId: "42",
+		botApi: bot,
+		WebSocketImpl: FakeWs as any,
+	});
+	daemon.connectSession("S", "ws://s", "ts");
+	const session = daemon.sessions.get("S")!;
+	await daemon.handleSessionMessage(session, { type: "identity_header", sessionId: "S", repo: "r", branch: "b" });
+	bot.calls = [];
+
+	const data = Buffer.from([5, 6, 7]).toString("base64");
+	await daemon.handleSessionMessage(session, {
+		type: "file_attachment",
+		sessionId: "S",
+		name: "out.pdf",
+		mime: "application/pdf",
+		data,
+		caption: "here",
+	});
+
+	const doc = bot.calls.find(c => c.method === "sendDocument");
+	expect(doc).toBeTruthy();
+	expect(doc!.body.document).toBe(data);
+	expect(doc!.body.fileName).toBe("out.pdf");
+	expect(doc!.body.mime).toBe("application/pdf");
+	expect(Number(doc!.body.message_thread_id)).toBeGreaterThan(0);
 });
 
 describe("telegram daemon reconnect reconciliation", () => {
