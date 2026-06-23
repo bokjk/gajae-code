@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { ModelsConfigSchema } from "../../../src/config/models-config-schema";
+import { Settings } from "../../../src/config/settings";
 import { SETTINGS_SCHEMA } from "../../../src/config/settings-schema";
 import {
 	CONFIGURABLE_SEARCH_PROVIDER_IDS,
@@ -40,5 +41,14 @@ describe("web search config schema", () => {
 		expect(webSearch.ui?.options).toContainEqual(expect.objectContaining({ value: "xai", label: "xAI" }));
 		expect(webSearch.values).toContain("insane");
 		expect(webSearch.ui?.options).toContainEqual(expect.objectContaining({ value: "insane", label: "Insane" }));
+	});
+
+	it("defines web.insaneFallback as a boolean defaulting to false", () => {
+		const setting = SETTINGS_SCHEMA["web.insaneFallback"];
+		expect(setting.type).toBe("boolean");
+		expect(setting.default).toBe(false);
+		expect(setting.ui?.tab).toBe("tools");
+		expect(Settings.isolated().get("web.insaneFallback")).toBe(false);
+		expect(Settings.isolated({ "web.insaneFallback": true }).get("web.insaneFallback")).toBe(true);
 	});
 });
