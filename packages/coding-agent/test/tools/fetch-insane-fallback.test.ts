@@ -137,7 +137,7 @@ describe("renderUrl hard-fail hook (integration via ReadTool)", () => {
 			getSessionFile: () => sessionFile,
 			getArtifactsDir: () => artifactsDir,
 			getSessionSpawns: () => null,
-			allocateOutputArtifact: async toolType => ({
+			allocateOutputArtifact: async (toolType: string) => ({
 				id: String(nextArtifactId++),
 				path: path.join(artifactsDir, `${nextArtifactId}.${toolType}.log`),
 			}),

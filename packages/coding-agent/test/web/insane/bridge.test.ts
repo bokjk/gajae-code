@@ -47,11 +47,14 @@ describe("tryInsaneFetch dependency gating", () => {
 	});
 });
 
-describe("tryInsaneFetch JSON mapping", () => {
-	it("maps ok:true content to success and preserves profile", async () => {
+describe("tryInsaneFetch engine-output mapping", () => {
+	const status = (s: string) => `[engine] ${s}`;
+
+	it("maps a successful run to content and preserves profile", async () => {
 		const r = await tryInsaneFetch("https://example.com", {
 			prober: deps(),
-			runner: async () => rawOutput({ stdout: JSON.stringify({ ok: true, content: "hello world", profile_used: "chrome" }) }),
+			runner: async () =>
+				rawOutput({ stdout: "hello world", stderr: status("ok=True verdict=weak_ok profile=chrome attempts=1") }),
 		});
 		expect(r.ok).toBe(true);
 		if (r.ok) {
@@ -60,10 +63,10 @@ describe("tryInsaneFetch JSON mapping", () => {
 		}
 	});
 
-	it("maps authentication required to failure without bypass", async () => {
+	it("maps auth_required verdict to failure without bypass", async () => {
 		const r = await tryInsaneFetch("https://example.com", {
 			prober: deps(),
-			runner: async () => rawOutput({ stdout: JSON.stringify({ ok: false, verdict: "authentication required" }) }),
+			runner: async () => rawOutput({ stdout: "", stderr: status("ok=False verdict=auth_required profile=None attempts=3") }),
 		});
 		expect(r.ok).toBe(false);
 		if (!r.ok) {
@@ -72,13 +75,13 @@ describe("tryInsaneFetch JSON mapping", () => {
 		}
 	});
 
-	it("maps invalid JSON to a controlled failure", async () => {
+	it("maps a missing status line to a controlled failure", async () => {
 		const r = await tryInsaneFetch("https://example.com", {
 			prober: deps(),
-			runner: async () => rawOutput({ stdout: "not json <html>" }),
+			runner: async () => rawOutput({ stdout: "<html>partial</html>", stderr: "engine fatal: boom" }),
 		});
 		expect(r.ok).toBe(false);
-		if (!r.ok) expect(r.notes).toContain(INSANE_NOTES.invalidJson);
+		if (!r.ok) expect(r.notes).toContain(INSANE_NOTES.noStatus);
 	});
 
 	it("maps timeout to a controlled failure", async () => {
@@ -99,10 +102,10 @@ describe("tryInsaneFetch JSON mapping", () => {
 		if (!r.ok) expect(r.reason).toBe("aborted");
 	});
 
-	it("treats ok:true with empty content as failure", async () => {
+	it("treats ok with empty body as failure", async () => {
 		const r = await tryInsaneFetch("https://example.com", {
 			prober: deps(),
-			runner: async () => rawOutput({ stdout: JSON.stringify({ ok: true, content: "   " }) }),
+			runner: async () => rawOutput({ stdout: "   ", stderr: status("ok=True verdict=weak_ok profile=None attempts=1") }),
 		});
 		expect(r.ok).toBe(false);
 		if (!r.ok) expect(r.notes).toContain(INSANE_NOTES.emptyContent);
@@ -113,14 +116,20 @@ describe("tryInsaneFetch JSON mapping", () => {
 			prober: deps(),
 			runner: async () =>
 				rawOutput({
-					stdout: JSON.stringify({ ok: false, verdict: "blocked", untried_routes: ["mobile", "rss"], must_invoke_playwright_mcp: true }),
+					stdout: "",
+					stderr: [
+						"   • mobile transform route",
+						"   • rss feed route",
+						"   ➜ must_invoke_playwright_mcp = TRUE",
+						status("ok=False verdict=challenge profile=None attempts=14"),
+					].join("\n"),
 				}),
 		});
 		expect(r.ok).toBe(false);
 		if (!r.ok) {
-			expect(r.notes.some(n => n.includes("mobile, rss"))).toBe(true);
+			expect(r.notes.some(n => n.includes("mobile transform route"))).toBe(true);
 			expect(r.notes).toContain(INSANE_NOTES.mustBrowserMcp);
-			expect(r.notes).toContain(INSANE_NOTES.verdict("blocked"));
+			expect(r.notes).toContain(INSANE_NOTES.verdict("challenge"));
 		}
 	});
 });
@@ -133,7 +142,7 @@ describe("tryInsaneFetch concurrency cap", () => {
 		});
 		const slowRunner = async (): Promise<EngineRawOutput> => {
 			await gate;
-			return rawOutput({ stdout: JSON.stringify({ ok: true, content: "x" }) });
+			return rawOutput({ stdout: "x", stderr: "[engine] ok=True verdict=weak_ok profile=None attempts=1" });
 		};
 		const first = tryInsaneFetch("https://example.com", { prober: deps(), runner: slowRunner, concurrencyLimit: 1 });
 		// Give the first call a tick to increment in-flight.

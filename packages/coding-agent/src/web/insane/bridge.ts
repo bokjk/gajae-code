@@ -37,7 +37,7 @@ export const INSANE_NOTES = {
 	noCurlCffi: `insane fallback unavailable: python3 cannot import curl_cffi; install curl_cffi for Phase 0-2`,
 	noBrowser: `insane fallback unavailable: node/playwright/stealth dependencies missing for Phase 3; install dependencies under packages/coding-agent/vendor/insane-search/engine/templates`,
 	timeout: (seconds: number) => `insane fallback timed out after ${seconds}s; normal read fallback preserved`,
-	invalidJson: `insane fallback failed: engine returned invalid JSON`,
+	noStatus: `insane fallback failed: engine produced no status line`,
 	authRequired: `insane fallback stopped: authentication required`,
 	verdict: (verdict: string) => `insane fallback failed: engine returned verdict=${verdict}`,
 	untried: (routes: string) => `insane fallback routes not tried: ${routes}`,
@@ -46,16 +46,6 @@ export const INSANE_NOTES = {
 	emptyContent: `insane fallback failed: engine reported ok but returned no content`,
 } as const;
 
-/** Raw JSON envelope produced by `python3 -m engine --json`. */
-export interface InsaneFetchResultRaw {
-	ok?: boolean;
-	verdict?: string;
-	content?: string;
-	profile_used?: string;
-	trace?: unknown;
-	untried_routes?: string[];
-	must_invoke_playwright_mcp?: boolean;
-}
 
 export interface InsaneSuccess {
 	ok: true;
@@ -146,7 +136,9 @@ export function runEngineSubprocess(inv: EngineInvocation, options: { spawnImpl?
 		let timedOut = false;
 		let aborted = false;
 
-		const child = spawnImpl("python3", ["-m", "engine", inv.url, "--json"], {
+		// Default (non-JSON) engine mode: page body → stdout, status/trace → stderr.
+		// `--json` deliberately omits the body, so it cannot be used to recover content.
+		const child = spawnImpl("python3", ["-m", "engine", inv.url], {
 			cwd: INSANE_VENDOR_DIR,
 			env: { ...process.env, PYTHONPATH: INSANE_VENDOR_DIR },
 			stdio: ["ignore", "pipe", "pipe"],
@@ -273,6 +265,24 @@ export interface TryInsaneFetchOptions {
 	runner?: EngineRunner;
 }
 
+/** Parse the engine's stderr `[engine] ok=.. verdict=.. profile=.. attempts=..` status line. */
+function parseEngineStatus(stderr: string): { ok: boolean; verdict?: string; profile?: string } | null {
+	const m = stderr.match(/\[engine\]\s+ok=(\w+)\s+verdict=(\S+)\s+profile=(\S+)\s+attempts=\d+/);
+	if (!m) return null;
+	const profile = m[3] === "None" ? undefined : m[3];
+	return { ok: m[1] === "True", verdict: m[2], profile };
+}
+
+/** Collect the "NOT EXHAUSTED" untried-route bullets the engine prints to stderr on failure. */
+function parseUntriedRoutes(stderr: string): string[] {
+	const routes: string[] = [];
+	for (const line of stderr.split("\n")) {
+		const m = line.match(/^\s*•\s*(.+?)\s*$/);
+		if (m?.[1]) routes.push(m[1]);
+	}
+	return routes;
+}
+
 function mapEngineOutput(raw: EngineRawOutput, timeoutMs: number): InsaneBridgeResult {
 	const notes: string[] = [];
 	if (raw.aborted) {
@@ -282,31 +292,28 @@ function mapEngineOutput(raw: EngineRawOutput, timeoutMs: number): InsaneBridgeR
 		notes.push(INSANE_NOTES.timeout(Math.round(timeoutMs / 1000)));
 		return { ok: false, reason: "timeout", notes };
 	}
-	let parsed: InsaneFetchResultRaw;
-	try {
-		parsed = JSON.parse(raw.stdout) as InsaneFetchResultRaw;
-	} catch {
-		notes.push(INSANE_NOTES.invalidJson);
-		return { ok: false, reason: "invalid-json", notes };
+
+	const status = parseEngineStatus(raw.stderr);
+	if (!status) {
+		notes.push(INSANE_NOTES.noStatus);
+		return { ok: false, reason: "no-status", notes };
 	}
 
-	const verdict = parsed.verdict?.trim();
-	if (verdict && /^authentication required$/i.test(verdict)) {
+	const verdict = status.verdict;
+	if (verdict === "auth_required") {
 		notes.push(INSANE_NOTES.authRequired);
 		return { ok: false, reason: "auth-required", verdict, notes };
 	}
 
-	if (parsed.untried_routes && parsed.untried_routes.length > 0) {
-		notes.push(INSANE_NOTES.untried(parsed.untried_routes.slice(0, 8).join(", ")));
-	}
-	if (parsed.must_invoke_playwright_mcp) {
-		notes.push(INSANE_NOTES.mustBrowserMcp);
-	}
+	const untried = parseUntriedRoutes(raw.stderr);
+	if (untried.length > 0) notes.push(INSANE_NOTES.untried(untried.slice(0, 8).join(" | ")));
+	if (/must_invoke_playwright_mcp\s*=\s*TRUE/i.test(raw.stderr)) notes.push(INSANE_NOTES.mustBrowserMcp);
 
-	if (parsed.ok && typeof parsed.content === "string" && parsed.content.trim().length > 0) {
-		return { ok: true, content: parsed.content, profileUsed: parsed.profile_used, notes };
+	const content = raw.stdout.trim();
+	if (status.ok && content.length > 0) {
+		return { ok: true, content, profileUsed: status.profile, notes };
 	}
-	if (parsed.ok) {
+	if (status.ok) {
 		notes.push(INSANE_NOTES.emptyContent);
 		return { ok: false, reason: "empty-content", notes };
 	}
