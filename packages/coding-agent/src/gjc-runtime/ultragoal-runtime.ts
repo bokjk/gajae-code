@@ -831,6 +831,14 @@ function normalizedEvidenceKind(row: JsonObject): string {
 function evidenceKindMatches(kind: string, words: string[]): boolean {
 	return words.some(word => kind.includes(word));
 }
+function formatActualArtifactKinds(artifactIds: string[], kinds: string[]): string {
+	if (artifactIds.length === 0) return "none";
+	return artifactIds.map((id, index) => `${id}=${kinds[index] ?? "<missing-kind>"}`).join(", ");
+}
+
+function formatExpectedKindWords(words: string[]): string {
+	return words.map(word => `"${word}"`).join(", ");
+}
 
 type SurfaceFamily = "web" | "cli" | "native" | "api-package" | "algorithm-math" | "unknown";
 
@@ -976,7 +984,7 @@ function validateSurfaceArtifactCompatibility(
 		const hasVisual = kinds.some(kind => evidenceKindMatches(kind, ["screenshot", "image", "visual"]));
 		if (!hasBrowser || !hasVisual) {
 			throw new Error(
-				`qualityGate ${fieldName} for GUI/web surfaces must reference browser automation plus screenshot or image-verdict artifacts`,
+				`qualityGate ${fieldName} for GUI/web surfaces must reference browser automation plus screenshot or image-verdict artifacts; surface "${surface}" expected one artifact kind containing one of ${formatExpectedKindWords(["browser", "playwright", "pandawright", "automation"])} and one containing one of ${formatExpectedKindWords(["screenshot", "image", "visual"])}; actual artifact kinds: ${formatActualArtifactKinds(artifactIds, kinds)}`,
 			);
 		}
 		return;
@@ -1003,7 +1011,7 @@ function validateSurfaceArtifactCompatibility(
 		const expected = surfaceFamilies[family];
 		if (!kinds.some(kind => evidenceKindMatches(kind, expected.evidence))) {
 			throw new Error(
-				`qualityGate ${fieldName} for ${expected.label} surfaces must reference compatible artifact kinds`,
+				`qualityGate ${fieldName} for ${expected.label} surfaces must reference compatible artifact kinds; surface "${surface}" expected at least one artifact kind containing one of ${formatExpectedKindWords(expected.evidence)}; actual artifact kinds: ${formatActualArtifactKinds(artifactIds, kinds)}`,
 			);
 		}
 	}
@@ -1499,6 +1507,20 @@ function isAllowedCliReplayCommand(command: readonly string[]): boolean {
 	if (executable === "gjc") return args.length === 1 && ["read", "status"].includes(args[0] ?? "");
 	return false;
 }
+function summarizeBlockedCliReplayCommand(command: readonly string[]): string {
+	const executable = command[0] ? basenameCommand(command[0]) : "<missing>";
+	const argCount = Math.max(0, command.length - 1);
+	return `${JSON.stringify(executable)} with ${argCount} arg${argCount === 1 ? "" : "s"}`;
+}
+
+function cliReplayAllowlistDescription(): string {
+	return [
+		'`bun --version`, `node --version`, or deterministic `bun/node -e "console.log(...)"`',
+		"`npm|pnpm|yarn --version` or `npm|pnpm|yarn list`",
+		"read-only `git status|rev-parse|merge-base|diff|show|log` with safe args",
+		"`gjc read` or `gjc status`",
+	].join("; ");
+}
 
 function resolveCliReplayCommand(command: string[]): string[] {
 	if (basenameCommand(command[0]!) === "bun") return [process.execPath, ...command.slice(1)];
@@ -1587,8 +1609,11 @@ function parseCliReplayRecord(
 	if (!command) throw new Error(`qualityGate ${fieldName}.command must be a non-empty string array`);
 	if (record.replaySafe !== true)
 		throw new Error(`qualityGate ${fieldName}.replaySafe must be true before CLI replay executes`);
-	if (!isAllowedCliReplayCommand(command))
-		throw new Error(`qualityGate ${fieldName}.command is not in the conservative CLI replay allowlist`);
+	if (!isAllowedCliReplayCommand(command)) {
+		throw new Error(
+			`qualityGate ${fieldName}.command is not in the conservative CLI replay allowlist; command ${summarizeBlockedCliReplayCommand(command)} is blocked. Allowed replay commands: ${cliReplayAllowlistDescription()}. For other commands, provide audited replayExempt metadata with reasonCode, reason, approvedBy, and fallbackArtifactRefs that point to a structurally valid fallback artifact.`,
+		);
+	}
 	if (record.normalization !== undefined && record.normalization !== "default") {
 		throw new Error(`qualityGate ${fieldName}.normalization must be default when provided`);
 	}
