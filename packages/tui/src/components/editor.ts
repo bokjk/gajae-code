@@ -1249,15 +1249,10 @@ export class Editor implements Component, Focusable {
 				this.#addNewLine();
 			}
 		}
-		// New line
+		// New line. Shift+Enter is the dedicated multiline chord; Ctrl+Enter submits.
 		else if (
-			(data.charCodeAt(0) === 10 && data.length > 1) || // Ctrl+Enter with modifiers
-			matchesKey(data, "ctrl+enter") || // Ctrl+Enter (Kitty/modifyOtherKeys, including lock bits/keypad Enter)
-			matchesKey(data, "ctrl+shift+enter") || // Ctrl+Shift+Enter (Kitty/modifyOtherKeys combined modifier)
-			data === "\x1b\r" || // Option+Enter in some terminals (legacy)
 			data === "\x1b[13;2~" || // Shift+Enter in some terminals (legacy format)
 			kb.matches(data, "tui.input.newLine") || // Shift+Enter (Kitty protocol, handles lock bits)
-			(data.length > 1 && data.includes("\x1b") && data.includes("\r")) ||
 			(data === "\n" && data.length === 1) // Shift+Enter from terminal sendInput mapping
 		) {
 			if (this.#shouldSubmitOnBackslashEnter(data, kb)) {
@@ -1267,8 +1262,13 @@ export class Editor implements Component, Focusable {
 			}
 			this.#addNewLine();
 		}
-		// Plain Enter - submit (handles both legacy \r and Kitty protocol with lock bits)
-		else if (kb.matches(data, "tui.input.submit") || data === "\n") {
+		// Enter/Ctrl+Enter - submit (handles both legacy \r and Kitty protocol with lock bits)
+		else if (
+			matchesKey(data, "ctrl+enter") ||
+			matchesKey(data, "ctrl+shift+enter") ||
+			kb.matches(data, "tui.input.submit") ||
+			data === "\n"
+		) {
 			// If submit is disabled, do nothing
 			if (this.disableSubmit) {
 				return;
