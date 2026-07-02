@@ -4,11 +4,23 @@
 ### Added
 
 - GJC now best-effort renames the containing cmux workspace to the current GJC session name when running inside a cmux terminal.
+- Added a status line default usage preset (#1305).
+- Telegram threaded updates now include verbose session identity (session id and cwd) metadata.
 
 ### Fixed
 
 - Deep Interview option-clarification prompts now stay out of the interview transcript and ambiguity recorder, so asking about displayed choices no longer persists as the round answer before the user selects an actual option.
 - `gjc daemon reload telegram` now spawns the replacement daemon with a stable owner pid so the new daemon does not exit immediately after the short-lived reload CLI process ends.
+- Managed `gjc --tmux` launches now size the initial window correctly (#1376).
+- Coordinator tmux-delivered turns now submit correctly on Enter (#1372).
+- Generic long `retry-after` rate limits are now kept retryable instead of being treated as fatal (#1370).
+- Anthropic hard 429 responses are now surfaced before the stream watchdog fires (#1369).
+- Internal sessions are now hidden from the Telegram recent-session list (#1367).
+- Telegram messages exceeding the length limit are now chunked correctly.
+- Web search now falls back correctly when the preferred provider is unavailable (#1348).
+- Restored the Ultragoal team checkpoint snapshot wording (#1349).
+- Deep Interview now exits early for simple tasks instead of running unnecessary rounds (#1311).
+- Ultragoal goal identity and state now resolve solely from the canonical session-scoped `goals.json`, eliminating goal-identity drift from transcript-replayed snapshots (#1344).
 
 ## [0.7.9] - 2026-07-01
 ### Added
