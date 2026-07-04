@@ -2,10 +2,17 @@
 
 ## [Unreleased]
 
+### Added
+
+- Skills can now be invoked inline within a prompt (for example, mid-message `/skill:*` references) instead of only as a standalone prompt, with matching autocomplete, input-controller queueing, and ACP dispatch support.
+
 ### Fixed
 
 - The Telegram notification daemon now tombstones a session endpoint generation after `session_closed`, preventing the scan loop from reconnecting to the still-live old endpoint and recreating an empty topic immediately after deleting the original topic.
 - `/contribute-pr` in the interactive TUI now prepares the redacted manifest and worker prompt without spawning a second GJC process on the same terminal, avoiding competing TUI renderers that make the chat viewport jump around. Run the generated worker prompt from a separate terminal instead.
+- The `skill` tool is now a default-registered essential tool instead of a discoverable one, so skill chaining is always available without first activating it through tool discovery.
+- The coordinator MCP server now classifies vanished-but-acknowledged tmux turns correctly, avoiding spurious delivery failures when a delegated turn's pane disappears after its prompt was already acknowledged.
+- Tool-call argument strings are now sanitized of invalid Unicode surrogate sequences across providers (Anthropic, Bedrock, Google, OpenAI chat/completions/responses, and Codex), including custom Responses tool input, preventing malformed tool calls from breaking requests.
 
 ## [0.8.0] - 2026-07-04
 
