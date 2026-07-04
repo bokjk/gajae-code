@@ -833,9 +833,22 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 			});
 		}
 
+		// Route through the client terminal when the client advertises the terminal capability.
+		// Skip when pty=true (PTY needs the local terminal UI).
+		const clientBridge =
+			this.session.bashRestrictionProfile === "read-only" ? undefined : this.session.getClientBridge?.();
+		const clientTerminalActive = Boolean(clientBridge?.capabilities.terminal && clientBridge.createTerminal && !pty);
+
 		const autoBgManager = AsyncJobManager.instance();
-		if (this.#autoBackgroundEnabled && !pty && autoBgManager) {
-			const autoBackgroundWaitMs = this.#resolveAutoBackgroundWaitMs(timeoutMs);
+		// Run non-PTY bash through the managed job path so Ctrl+B-twice fold-on-demand works
+		// even when auto-background is disabled. When a client terminal will handle the
+		// command, keep the existing bridge path unless auto-background is enabled.
+		if (!pty && autoBgManager && (this.#autoBackgroundEnabled || !clientTerminalActive)) {
+			// With auto-background off, wait past the command's own timeout so the job only
+			// leaves the foreground on an explicit Ctrl+B fold, never on an auto-background timer.
+			const autoBackgroundWaitMs = this.#autoBackgroundEnabled
+				? this.#resolveAutoBackgroundWaitMs(timeoutMs)
+				: timeoutMs + 1_000;
 			const startBackgrounded = autoBackgroundWaitMs === 0;
 			const job = this.#startManagedBashJob({
 				command,
@@ -891,10 +904,6 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 			});
 		}
 
-		// Route through the client terminal when the client advertises the terminal capability.
-		// Skip when pty=true (PTY needs the local terminal UI).
-		const clientBridge =
-			this.session.bashRestrictionProfile === "read-only" ? undefined : this.session.getClientBridge?.();
 		if (clientBridge?.capabilities.terminal && clientBridge.createTerminal && !pty) {
 			const handle = await clientBridge.createTerminal({
 				command,
