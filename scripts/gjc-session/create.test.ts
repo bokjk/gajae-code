@@ -46,6 +46,13 @@ function startPaneLog(session: string, stateDir: string): void {
 	expect(Bun.spawnSync(["tmux", "pipe-pane", "-t", `${session}:0.0`, `cat >> '${paneLog}'`]).exitCode).toBe(0);
 }
 
+function isolatedEnv(overrides: Record<string, string | undefined>): Record<string, string | undefined> {
+	const env = { ...process.env };
+	delete env.GJC_SESSION_WORKDIR;
+	delete env.GJC_SESSION_STATE_DIR;
+	return { ...env, ...overrides };
+}
+
 afterEach(async () => {
 	for (const session of tmuxSessions.splice(0)) {
 		Bun.spawnSync(["tmux", "kill-session", "-t", session], { stderr: "pipe", stdout: "pipe" });
@@ -81,13 +88,12 @@ exit 0
 		);
 
 		const result = Bun.spawnSync(["bash", "scripts/gjc-session/create.sh", session, worktree], {
-			env: {
-				...process.env,
+			env: isolatedEnv({
 				GJC_BIN: fakeGjc,
 				GJC_SESSION_MONITOR_DISABLE: "1",
 				GJC_SESSION_SKIP_ROUTER: "1",
 				GJC_SESSION_STATE_DIR: stateDir,
-			},
+			}),
 			stderr: "pipe",
 			stdout: "pipe",
 		});
@@ -135,14 +141,13 @@ exit 0
 		await makeExecutable(fakeRouter, `#!/usr/bin/env bash\nprintf '%s\\n' "$*" >> '${routerLog}'\nexit 0\n`);
 
 		const created = Bun.spawnSync(["bash", "scripts/gjc-session/create.sh", session, worktree, "C-test"], {
-			env: {
-				...process.env,
+			env: isolatedEnv({
 				GJC_BIN: fakeGjc,
 				GJC_SESSION_MONITOR_INTERVAL: "1",
 				GJC_SESSION_ROUTER: fakeRouter,
 				GJC_SESSION_SKIP_ROUTER: "1",
 				GJC_SESSION_STATE_DIR: stateDir,
-			},
+			}),
 			stderr: "pipe",
 			stdout: "pipe",
 		});
@@ -159,10 +164,12 @@ exit 0
 		};
 		expect(vanished).toMatchObject({
 			finalPresent: false,
-			reason: "tmux_session_missing",
+			reason: "tmux_session_missing_before_prompt_acceptance",
+			phase: "before_prompt_acceptance",
 			severity: "failure",
+			tuiReadyObserved: true,
 		});
-		expect(vanished.runtimeState).toBe(path.join(stateDir, "runtime-state.json"));
+		expect(vanished.runtimeState).toBe(path.relative(worktree, path.join(stateDir, "runtime-state.json")));
 		expect(await Bun.file(routerLog).text()).toContain("tmux stale --session");
 	});
 	test("external monitor records vanished sessions after prompt acceptance", async () => {
@@ -184,24 +191,22 @@ sleep 60
 		);
 
 		const created = Bun.spawnSync(["bash", "scripts/gjc-session/create.sh", session, worktree], {
-			env: {
-				...process.env,
+			env: isolatedEnv({
 				GJC_BIN: fakeGjc,
 				GJC_SESSION_MONITOR_INTERVAL: "1",
 				GJC_SESSION_SKIP_ROUTER: "1",
 				GJC_SESSION_STATE_DIR: stateDir,
-			},
+			}),
 			stderr: "pipe",
 			stdout: "pipe",
 		});
 		expect(created.exitCode).toBe(0);
 
 		const prompted = Bun.spawnSync(["bash", "scripts/gjc-session/prompt.sh", session, "do accepted work"], {
-			env: {
-				...process.env,
+			env: isolatedEnv({
 				GJC_SESSION_STATE_DIR: stateDir,
 				GJC_SESSION_PROMPT_EVIDENCE_ATTEMPTS: "1",
-			},
+			}),
 			stderr: "pipe",
 			stdout: "pipe",
 		});
@@ -221,6 +226,47 @@ sleep 60
 			severity: "failure",
 		});
 	}, 20000);
+
+	test("prompt records vanished status and refuses to paste when tmux session is missing", async () => {
+		const session = `gjc_issue_1496_prompt_missing_${process.pid}_${Date.now()}`;
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), "gjc-session-prompt-missing-"));
+		tempRoots.push(root);
+		const worktree = await makeGitWorktree(root);
+		const stateDir = path.join(root, "state");
+		await fs.mkdir(stateDir, { recursive: true });
+		await Bun.write(path.join(stateDir, "pane.log"), "Gajae forge\n> Type your message\n");
+		await Bun.write(path.join(stateDir, "metadata.json"), JSON.stringify({ session, workdir: worktree }, null, 2));
+		const unrelatedWorkdir = path.join(root, "unrelated-workdir");
+
+
+		const result = Bun.spawnSync(["bash", "scripts/gjc-session/prompt.sh", session, "do not paste this prompt"], {
+			env: isolatedEnv({
+				GJC_SESSION_STATE_DIR: stateDir,
+				GJC_SESSION_WORKDIR: unrelatedWorkdir,
+			}),
+			stderr: "pipe",
+			stdout: "pipe",
+		});
+
+		expect(result.exitCode).toBe(1);
+		expect(result.stderr.toString()).toContain("refusing to paste prompt: tmux session");
+		expect(result.stderr.toString()).not.toContain("do not paste this prompt");
+		const vanished = (await Bun.file(path.join(stateDir, "vanished.json")).json()) as {
+			phase: string;
+			reason: string;
+			promptAccepted: boolean;
+			finalPresent: boolean;
+			runtimeState: string;
+		};
+		expect(vanished).toMatchObject({
+			phase: "before_prompt_injection",
+			reason: "tmux_session_missing_before_prompt_injection",
+			promptAccepted: false,
+			finalPresent: false,
+		});
+		expect(vanished.runtimeState).toBe(path.relative(worktree, path.join(stateDir, "runtime-state.json")));
+	}, 20000);
+
 	test("prompt refuses success without durable turn evidence", async () => {
 		const session = `gjc_issue_1385_prompt_${process.pid}_${Date.now()}`;
 		const root = await fs.mkdtemp(path.join(os.tmpdir(), "gjc-session-prompt-"));
@@ -243,12 +289,11 @@ sleep 60
 		startPaneLog(session, stateDir);
 
 		const result = Bun.spawnSync(["bash", "scripts/gjc-session/prompt.sh", session, "do work"], {
-			env: {
-				...process.env,
+			env: isolatedEnv({
 				GJC_SESSION_TURN_EVIDENCE_PATTERN: "__NO_TURN_EVIDENCE__",
 				GJC_SESSION_STATE_DIR: stateDir,
 				GJC_SESSION_PROMPT_EVIDENCE_ATTEMPTS: "1",
-			},
+			}),
 			stderr: "pipe",
 			stdout: "pipe",
 		});
@@ -278,11 +323,10 @@ sleep 60
 		startPaneLog(session, stateDir);
 
 		const result = Bun.spawnSync(["bash", "scripts/gjc-session/prompt.sh", session, "new prompt that sleeping process will not accept"], {
-			env: {
-				...process.env,
+			env: isolatedEnv({
 				GJC_SESSION_STATE_DIR: stateDir,
 				GJC_SESSION_PROMPT_EVIDENCE_ATTEMPTS: "1",
-			},
+			}),
 			stderr: "pipe",
 			stdout: "pipe",
 		});
@@ -314,11 +358,10 @@ sleep 60
 
 		const rawPrompt = "Working Tool prompt echo must not count";
 		const result = Bun.spawnSync(["bash", "scripts/gjc-session/prompt.sh", session, rawPrompt], {
-			env: {
-				...process.env,
+			env: isolatedEnv({
 				GJC_SESSION_STATE_DIR: stateDir,
 				GJC_SESSION_PROMPT_EVIDENCE_ATTEMPTS: "1",
-			},
+			}),
 			stderr: "pipe",
 			stdout: "pipe",
 		});
@@ -348,11 +391,10 @@ sleep 60
 		const result = Bun.spawnSync(
 			["bash", "scripts/gjc-session/prompt.sh", session, "new prompt sleeping process should not accept"],
 			{
-				env: {
-					...process.env,
+				env: isolatedEnv({
 					GJC_SESSION_STATE_DIR: stateDir,
 					GJC_SESSION_PROMPT_EVIDENCE_ATTEMPTS: "1",
-				},
+				}),
 				stderr: "pipe",
 				stdout: "pipe",
 			},
@@ -386,11 +428,10 @@ sleep 60
 
 		const rawPrompt = "Working Tool accepted prompt still needs owner output";
 		const result = Bun.spawnSync(["bash", "scripts/gjc-session/prompt.sh", session, rawPrompt], {
-			env: {
-				...process.env,
+			env: isolatedEnv({
 				GJC_SESSION_STATE_DIR: stateDir,
 				GJC_SESSION_PROMPT_EVIDENCE_ATTEMPTS: "1",
-			},
+			}),
 			stderr: "pipe",
 			stdout: "pipe",
 		});
@@ -422,11 +463,10 @@ sleep 60
 		startPaneLog(session, stateDir);
 
 		const result = Bun.spawnSync(["bash", "scripts/gjc-session/prompt.sh", session, "exit after evidence"], {
-			env: {
-				...process.env,
+			env: isolatedEnv({
 				GJC_SESSION_STATE_DIR: stateDir,
 				GJC_SESSION_PROMPT_EVIDENCE_ATTEMPTS: "2",
-			},
+			}),
 			stderr: "pipe",
 			stdout: "pipe",
 		});
@@ -459,11 +499,10 @@ sleep 60
 
 		const rawPrompt = "Working Tool post submit echo only";
 		const result = Bun.spawnSync(["bash", "scripts/gjc-session/prompt.sh", session, rawPrompt], {
-			env: {
-				...process.env,
+			env: isolatedEnv({
 				GJC_SESSION_STATE_DIR: stateDir,
 				GJC_SESSION_PROMPT_EVIDENCE_ATTEMPTS: "1",
-			},
+			}),
 			stderr: "pipe",
 			stdout: "pipe",
 		});
@@ -482,6 +521,10 @@ sleep 60
 		const stateDir = path.join(root, ".gjc-session-state", session);
 		await fs.mkdir(stateDir, { recursive: true });
 		await Bun.write(path.join(stateDir, "pane.log"), "");
+		const unrelatedStateDir = path.join(root, "unrelated-state");
+		await fs.mkdir(unrelatedStateDir, { recursive: true });
+		await Bun.write(path.join(unrelatedStateDir, "pane.log"), "Working from unrelated ambient session\n");
+
 		tmuxSessions.push(session);
 		expect(
 			Bun.spawnSync([
@@ -497,11 +540,11 @@ sleep 60
 		startPaneLog(session, stateDir);
 
 		const result = Bun.spawnSync(["bash", "scripts/gjc-session/prompt.sh", session, "discovery prompt"], {
-			env: {
-				...process.env,
+			env: isolatedEnv({
 				GJC_SESSION_LOG_SEARCH_ROOT: root,
+				GJC_SESSION_STATE_DIR: unrelatedStateDir,
 				GJC_SESSION_PROMPT_EVIDENCE_ATTEMPTS: "1",
-			},
+			}),
 			stderr: "pipe",
 			stdout: "pipe",
 		});
