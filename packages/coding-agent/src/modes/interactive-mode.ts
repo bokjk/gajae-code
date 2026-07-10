@@ -116,8 +116,15 @@ import {
 	onThemeChange,
 	theme,
 } from "./theme/theme";
-import type { CompactionQueuedMessage, InteractiveModeContext, SubmittedUserInput, TodoItem, TodoPhase } from "./types";
-import { addChatChild, UiHelpers } from "./utils/ui-helpers";
+import type {
+	CompactionQueuedMessage,
+	InteractiveModeContext,
+	SubmittedUserInput,
+	TodoItem,
+	TodoPhase,
+	TranscriptRebuildPolicy,
+} from "./types";
+import { addChatChild, prepareTranscriptRebuild, UiHelpers } from "./utils/ui-helpers";
 
 const INTERACTIVE_ABORT_CLEANUP_TIMEOUT_MS = 5_000;
 const COMPOSER_NEWLINE_HINT = process.platform === "win32" ? "Alt+Enter/Ctrl+J" : "Shift+Enter/Ctrl+J";
@@ -391,6 +398,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	#eventBusUnsubscribers: Array<() => void> = [];
 	#welcomeComponent?: WelcomeComponent;
 	#ircSplitView: IrcSplitViewComponent;
+	#ircSidebarAvailable = false;
+	#ircSidebarRequestedVisible = false;
 
 	constructor(
 		session: AgentSession,
@@ -568,6 +577,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 
 		this.ui.addChild(this.#ircSplitView);
+		this.ui.setViewportAnchorComponent(this.#ircSplitView);
+
 		this.ui.addChild(this.pendingMessagesContainer);
 		this.ui.addChild(this.statusContainer);
 		this.ui.addChild(this.todoContainer);
@@ -880,7 +891,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		if (!submission.customType) {
 			this.pendingImages = submission.images ? [...submission.images] : [];
-			this.rebuildChatFromMessages();
+			this.rebuildChatFromMessages("reconcile-same-transcript");
 			this.editor.setText(submission.text);
 		}
 		this.updateEditorChrome();
@@ -1028,7 +1039,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.editor.setTopBorder(undefined);
 	}
 
-	rebuildChatFromMessages(): void {
+	rebuildChatFromMessages(policy: TranscriptRebuildPolicy): void {
+		prepareTranscriptRebuild(this.ui, policy);
 		this.chatContainer.clear();
 		const context = this.session.buildDisplaySessionContext();
 		this.renderSessionContext(context);
@@ -2303,6 +2315,14 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#eventController.reconcileIrcExpiryTimers(this.#uiHelpers.getRenderedIrcInlineComponents());
 	}
 
+	rebuildInitialMessages(
+		policy: TranscriptRebuildPolicy,
+		prebuiltContext?: SessionContext,
+		options?: { preserveExistingChat?: boolean },
+	): void {
+		prepareTranscriptRebuild(this.ui, policy);
+		this.#uiHelpers.renderInitialMessages(prebuiltContext, options);
+	}
 	renderInitialMessages(prebuiltContext?: SessionContext, options?: { preserveExistingChat?: boolean }): void {
 		this.#uiHelpers.renderInitialMessages(prebuiltContext, options);
 	}
@@ -2313,6 +2333,10 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	findLastAssistantMessage(): AssistantMessage | undefined {
 		return this.#uiHelpers.findLastAssistantMessage();
+	}
+
+	getAssistantViewportAnchorId(message: AssistantMessage): string {
+		return this.#uiHelpers.assistantViewportAnchorId(message);
 	}
 
 	extractAssistantText(message: AssistantMessage): string {
@@ -2681,15 +2705,21 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	toggleIrcSidebar(): void {
-		if (this.settings.get("irc.enabled") !== true || this.settings.get("irc.sidebar.enabled") !== true) return;
-		this.#ircSplitView.setVisible(!this.#ircSplitView.visible);
+		if (
+			!this.#ircSidebarAvailable ||
+			this.settings.get("irc.enabled") !== true ||
+			this.settings.get("irc.sidebar.enabled") !== true
+		)
+			return;
+		this.#ircSidebarRequestedVisible = !this.#ircSidebarRequestedVisible;
+		this.#ircSplitView.setVisible(this.#ircSidebarRequestedVisible);
 		this.#invalidateIrcSidebarRender();
 		this.ui.requestRender();
 	}
 
 	applyIrcSidebarAvailability(enabled: boolean): void {
-		if (enabled) return;
-		this.#ircSplitView.setVisible(false);
+		this.#ircSidebarAvailable = enabled;
+		this.#ircSplitView.setVisible(enabled && this.#ircSidebarRequestedVisible);
 		this.#invalidateIrcSidebarRender();
 		this.ui.requestRender();
 	}
@@ -2697,6 +2727,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	resetIrcSidebarSession(): void {
 		this.ircLedger.reset();
 		this.#eventController.resetIrcObservations();
+		this.#ircSidebarAvailable = false;
+		this.#ircSidebarRequestedVisible = false;
 		this.#ircSplitView.setVisible(false);
 		this.#invalidateIrcSidebarRender();
 		this.ui.requestRender();

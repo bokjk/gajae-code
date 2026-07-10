@@ -301,7 +301,7 @@ import type {
 	SessionContext,
 	SessionManager,
 } from "./session-manager";
-import { getLatestCompactionEntry } from "./session-manager";
+import { getLatestCompactionEntry, transferSessionMessageIdentity } from "./session-manager";
 import { ToolChoiceQueue } from "./tool-choice-queue";
 import { YieldQueue } from "./yield-queue";
 
@@ -2211,7 +2211,9 @@ export class AgentSession {
 			const message = event.message;
 			const deobfuscatedContent = obfuscator.deobfuscateObject(message.content);
 			if (deobfuscatedContent !== message.content) {
-				displayEvent = { ...event, message: { ...message, content: deobfuscatedContent } };
+				const displayMessage = { ...message, content: deobfuscatedContent };
+				transferSessionMessageIdentity([message], [displayMessage]);
+				displayEvent = { ...event, message: displayMessage };
 			}
 		}
 
@@ -2226,6 +2228,15 @@ export class AgentSession {
 		}
 
 		await this.#emitSessionEvent(displayEvent);
+		if (
+			displayEvent !== event &&
+			displayEvent.type === "message_end" &&
+			displayEvent.message.role === "assistant" &&
+			event.type === "message_end" &&
+			event.message.role === "assistant"
+		) {
+			transferSessionMessageIdentity([displayEvent.message], [event.message]);
+		}
 
 		if (event.type === "turn_start") {
 			this.#resetStreamingEditState();
