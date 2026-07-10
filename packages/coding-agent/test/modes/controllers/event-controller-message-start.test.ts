@@ -5,6 +5,8 @@ import { initTheme } from "@gajae-code/coding-agent/modes/theme/theme";
 import type { InteractiveModeContext } from "@gajae-code/coding-agent/modes/types";
 import { UiHelpers } from "@gajae-code/coding-agent/modes/utils/ui-helpers";
 import type { CustomMessage } from "@gajae-code/coding-agent/session/messages";
+import { IrcObservationLedger } from "@gajae-code/coding-agent/modes/irc-observation-ledger";
+
 import { Container } from "@gajae-code/tui";
 
 beforeAll(() => {
@@ -234,6 +236,8 @@ function createIrcContext() {
 		updateEditorTopBorder: vi.fn(),
 		ui: { requestRender },
 		chatContainer,
+		settings: { get: () => true },
+		ircLedger: new IrcObservationLedger(),
 		session: {},
 	} as unknown as InteractiveModeContext;
 	const helpers = new UiHelpers(ctx);

@@ -34,6 +34,10 @@ export type * from "./symbols";
 // Terminal interface and implementations
 export * from "./terminal";
 // Terminal image support
+export {
+	isTerminalGraphicsFallbackActive,
+	withTerminalGraphicsFallback,
+} from "./terminal-capabilities";
 export * from "./terminal-capabilities";
 // TTY ID
 export * from "./ttyid";

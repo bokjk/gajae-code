@@ -53,6 +53,26 @@ export function isNotificationSuppressed(): boolean {
 	return value === "off" || value === "0" || value === "false";
 }
 
+let terminalGraphicsFallbackDepth = 0;
+
+/**
+ * Synchronously suppress terminal graphics while rendering a text-only surface.
+ * Nested scopes remain active until the outermost scope exits.
+ */
+export function withTerminalGraphicsFallback<T>(fn: () => T): T {
+	terminalGraphicsFallbackDepth++;
+	try {
+		return fn();
+	} finally {
+		terminalGraphicsFallbackDepth--;
+	}
+}
+
+/** Returns whether terminal graphics are currently suppressed by a render scope. */
+export function isTerminalGraphicsFallbackActive(): boolean {
+	return terminalGraphicsFallbackDepth > 0;
+}
+
 function getForcedImageProtocol(): ImageProtocol | null | undefined {
 	const raw = $env.PI_FORCE_IMAGE_PROTOCOL?.trim().toLowerCase();
 	if (!raw) return undefined;

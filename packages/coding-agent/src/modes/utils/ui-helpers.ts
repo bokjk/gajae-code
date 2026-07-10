@@ -21,6 +21,8 @@ import { ToolExecutionComponent } from "../../modes/components/tool-execution";
 import { UserMessageComponent } from "../../modes/components/user-message";
 import { theme } from "../../modes/theme/theme";
 import type { CompactionQueuedMessage, InteractiveModeContext } from "../../modes/types";
+import { isIrcCustomType, parseIrcMessage, type ParsedIrcMessage } from "./irc-message";
+
 import {
 	type CustomMessage,
 	isSilentAbort,
@@ -187,6 +189,33 @@ export function trimChatChildren(ctx: InteractiveModeContext): void {
 
 export class UiHelpers {
 	constructor(private ctx: InteractiveModeContext) {}
+	#renderedIrcInlineComponents = new Map<string, readonly Component[]>();
+
+	getRenderedIrcInlineComponents(): ReadonlyMap<string, readonly Component[]> {
+		return this.#renderedIrcInlineComponents;
+	}
+
+	addIrcObservationToChat(message: ParsedIrcMessage): Component[] {
+		const arrow =
+			message.kind === "incoming"
+				? `⇦ ${message.from}`
+				: message.kind === "autoreply"
+					? `⇨ ${message.to}`
+					: `${message.from} ⇨ ${message.to}`;
+		const components: Component[] = [];
+		const headerComponent = new Text(theme.fg("accent", `[IRC] ${arrow}`), 1, 0);
+		addChatChild(this.ctx, headerComponent);
+		components.push(headerComponent);
+		if (message.text) {
+			for (const line of message.text.split("\n")) {
+				const lineComponent = new Text(theme.fg("muted", `  ${line}`), 0, 0);
+				addChatChild(this.ctx, lineComponent);
+				components.push(lineComponent);
+			}
+		}
+		return components;
+	}
+
 
 	/** Extract text content from a user message */
 	getUserMessageText(message: Message): string {
@@ -304,50 +333,9 @@ export class UiHelpers {
 						addChatChild(this.ctx, component);
 						break;
 					}
-					if (
-						message.customType === "irc:incoming" ||
-						message.customType === "irc:autoreply" ||
-						message.customType === "irc:relay"
-					) {
-						const details = (
-							message as CustomMessage<{
-								from?: string;
-								to?: string;
-								message?: string;
-								reply?: string;
-								body?: string;
-								kind?: "message" | "reply";
-							}>
-						).details;
-						let arrow: string;
-						let body: string;
-						if (message.customType === "irc:incoming") {
-							const peer = details?.from ?? "?";
-							body = details?.message ?? "";
-							arrow = `⇦ ${peer}`;
-						} else if (message.customType === "irc:autoreply") {
-							const peer = details?.to ?? "?";
-							body = details?.reply ?? "";
-							arrow = `⇨ ${peer}`;
-						} else {
-							const from = details?.from ?? "?";
-							const to = details?.to ?? "?";
-							body = details?.body ?? "";
-							arrow = `${from} ⇨ ${to}`;
-						}
-						const components: Component[] = [];
-						const header = `${theme.fg("accent", `[IRC] ${arrow}`)}`;
-						const headerComponent = new Text(header, 1, 0);
-						addChatChild(this.ctx, headerComponent);
-						components.push(headerComponent);
-						if (body) {
-							for (const line of body.split("\n")) {
-								const lineComponent = new Text(theme.fg("muted", `  ${line}`), 0, 0);
-								addChatChild(this.ctx, lineComponent);
-								components.push(lineComponent);
-							}
-						}
-						return components;
+					if (message.role === "custom" && isIrcCustomType(message.customType)) {
+						const parsed = parseIrcMessage(message);
+						if (parsed) return this.addIrcObservationToChat(parsed);
 					}
 					if (message.customType === "subagent:steer" || message.customType === "subagent:steer:relay") {
 						const details = (
@@ -469,12 +457,17 @@ export class UiHelpers {
 		const readToolCallArgs = new Map<string, Record<string, unknown>>();
 		const readToolCallAssistantComponents = new Map<string, AssistantMessageComponent>();
 		const deferredMessages: AgentMessage[] = [];
+		this.#renderedIrcInlineComponents.clear();
 		for (const message of sessionContext.messages) {
 			// Defer compaction summaries so they render at the bottom (visible after scroll)
 			if (message.role === "compactionSummary") {
 				deferredMessages.push(message);
 				continue;
 			}
+			if (message.role === "custom" && isIrcCustomType(message.customType)) {
+				continue;
+			}
+
 			// Assistant messages need special handling for tool calls
 			if (message.role === "assistant") {
 				this.ctx.addMessageToChat(message);
@@ -625,6 +618,10 @@ export class UiHelpers {
 		for (const message of deferredMessages) {
 			this.ctx.addMessageToChat(message, options);
 		}
+		for (const record of this.ctx.ircLedger.getInlineProjection(Date.now())) {
+			this.#renderedIrcInlineComponents.set(record.observationId, this.addIrcObservationToChat(record));
+		}
+
 
 		this.ctx.pendingTools.clear();
 		this.ctx.ui.requestRender();

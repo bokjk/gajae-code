@@ -12,6 +12,8 @@ import {
 	setCellDimensions,
 	setKittyTransmitWriter,
 	TERMINAL,
+	isTerminalGraphicsFallbackActive,
+	withTerminalGraphicsFallback,
 } from "@gajae-code/tui/terminal-capabilities";
 
 type MutableTerminalInfo = {
@@ -172,6 +174,36 @@ describe("terminal image rendering", () => {
 		expect(result).not.toBeNull();
 		expect(result?.rows).toBe(2);
 		expect(result?.sequence.startsWith("\x1bP")).toBe(true);
+	});
+
+	it("uses textual image fallback only within scoped graphics fallback", () => {
+		terminal.imageProtocol = ImageProtocol.Sixel;
+		const image = new Image(
+			BASE64_ONE_PIXEL_PNG,
+			"image/png",
+			{ fallbackColor: text => text },
+			{ maxWidthCells: 10, maxHeightCells: 2, refetch: () => BASE64_ONE_PIXEL_PNG },
+			SQUARE_DIMENSIONS,
+		);
+
+		expect(image.render(20).join("\n")).toContain("\x1bP");
+		const fallbackLines = withTerminalGraphicsFallback(() => image.render(20));
+		expect(fallbackLines.join("\n")).toContain("[image/png");
+		expect(fallbackLines.join("\n")).not.toContain("\x1bP");
+		expect(image.render(20).join("\n")).toContain("\x1bP");
+	});
+
+	it("restores nested graphics fallback state after exceptions", () => {
+		expect(isTerminalGraphicsFallbackActive()).toBe(false);
+		expect(() =>
+			withTerminalGraphicsFallback(() =>
+				withTerminalGraphicsFallback(() => {
+					expect(isTerminalGraphicsFallbackActive()).toBe(true);
+					throw new Error("expected");
+				}),
+			),
+		).toThrow("expected");
+		expect(isTerminalGraphicsFallbackActive()).toBe(false);
 	});
 
 	it("Image component places the kitty escape on the first row without cursor-up", () => {

@@ -20,17 +20,20 @@ import { completionNotifyDisabledByEnv } from "../../notifications/config";
 import { summaryFromMessage } from "../../notifications/helpers";
 import type { PlanApprovalDetails } from "../../plan-mode/approved-plan";
 import type { AgentSessionEvent } from "../../session/agent-session";
-import { isSilentAbort, readPendingDisplayTag } from "../../session/messages";
+import { isSilentAbort, readPendingDisplayTag, type CustomMessage } from "../../session/messages";
 import type { ResolveToolDetails } from "../../tools/resolve";
 import { interruptHint } from "../shared";
 import { buildAbortDisplayMessage } from "../utils/abort-message";
 import { consumeInjectedOptimisticSignature } from "../utils/injected-user-submission";
 import { ringTerminalBell } from "../utils/terminal-bell";
+import { parseIrcMessage } from "../utils/irc-message";
+import type { IrcObservationRecord } from "../irc-observation-ledger";
+
+
 import { addChatChild, argsWithPartialJson } from "../utils/ui-helpers";
 
 type AgentSessionEventKind = AgentSessionEvent["type"];
 
-const IRC_MESSAGE_VISIBLE_TTL_MS = 10_000;
 
 /** Test-only performance counters for advisory baseline tests. */
 export const __eventControllerPerfCounters = {
@@ -112,6 +115,7 @@ export class EventController {
 	#lastAssistantComponent: AssistantMessageComponent | undefined = undefined;
 	#idleCompactionTimer?: NodeJS.Timeout;
 	#ircExpiryTimers = new Map<string, NodeJS.Timeout>();
+	#renderedIrcComponents = new Map<string, readonly Component[]>();
 	#toolIntentCache = new Map<string, { args: unknown; intent: string | undefined }>();
 	#thinkingContentIndices = new Set<number>();
 	#handlers: AgentSessionEventHandlers;
@@ -157,10 +161,7 @@ export class EventController {
 			this.ctx.retryLoader.stop();
 			this.ctx.retryLoader = undefined;
 		}
-		for (const timer of this.#ircExpiryTimers.values()) {
-			clearTimeout(timer);
-		}
-		this.#ircExpiryTimers.clear();
+		this.clearIrcExpiryTimers();
 	}
 
 	#resetReadGroup(): void {
@@ -263,8 +264,26 @@ export class EventController {
 		this.ctx.ui.requestRender();
 	}
 
+	#observeIrcMessage(message: CustomMessage): void {
+		const parsed = parseIrcMessage(message);
+		if (!parsed) return;
+		const record = this.ctx.ircLedger.observe(parsed, this.ctx.settings.get("irc.sidebar.enabled") === true);
+		const signature = `irc:${record.observationId}`;
+		if (this.#renderedCustomMessages.has(signature)) return;
+		this.#renderedCustomMessages.add(signature);
+		this.#resetReadGroup();
+		const components = this.ctx.addMessageToChat(message);
+		this.#renderedIrcComponents.set(record.observationId, components);
+		this.#scheduleIrcExpiry(record, components);
+		this.ctx.ui.requestRender();
+	}
+
 	async #handleMessageStart(event: Extract<AgentSessionEvent, { type: "message_start" }>): Promise<void> {
 		if (event.message.role === "hookMessage" || event.message.role === "custom") {
+			if (event.message.role === "custom" && parseIrcMessage(event.message)) {
+				this.#observeIrcMessage(event.message);
+				return;
+			}
 			const signature = `${event.message.role}:${event.message.customType}:${event.message.timestamp}`;
 			if (this.#renderedCustomMessages.has(signature)) {
 				return;
@@ -339,15 +358,59 @@ export class EventController {
 	}
 
 	async #handleIrcMessage(event: Extract<AgentSessionEvent, { type: "irc_message" }>): Promise<void> {
-		const signature = `${event.message.role}:${event.message.customType}:${event.message.timestamp}`;
-		if (this.#renderedCustomMessages.has(signature)) {
-			return;
+		this.#observeIrcMessage(event.message);
+	}
+
+	clearIrcExpiryTimers(): void {
+		for (const timer of this.#ircExpiryTimers.values()) {
+			clearTimeout(timer);
 		}
-		this.#renderedCustomMessages.add(signature);
-		this.#resetReadGroup();
-		const components = this.ctx.addMessageToChat(event.message);
-		this.#scheduleIrcExpiry(signature, components);
-		this.ctx.ui.requestRender();
+		this.#ircExpiryTimers.clear();
+	}
+
+	resetIrcObservations(): void {
+		this.clearIrcExpiryTimers();
+		for (const components of this.#renderedIrcComponents.values()) {
+			for (const component of components) {
+				this.ctx.chatContainer.removeChild(component);
+			}
+		}
+		this.#renderedIrcComponents.clear();
+		for (const signature of this.#renderedCustomMessages) {
+			if (signature.startsWith("irc:")) this.#renderedCustomMessages.delete(signature);
+		}
+	}
+
+	reconcileIrcExpiryTimers(componentsByObservationId: ReadonlyMap<string, readonly Component[]>): void {
+		this.clearIrcExpiryTimers();
+		this.#renderedIrcComponents.clear();
+		const now = Date.now();
+		for (const record of this.ctx.ircLedger.getInlineProjection(now)) {
+			const components = componentsByObservationId.get(record.observationId);
+			if (components) {
+				this.#renderedIrcComponents.set(record.observationId, components);
+				this.#scheduleIrcExpiry(record, components);
+			}
+		}
+	}
+
+	#scheduleIrcExpiry(
+		record: IrcObservationRecord,
+		components: readonly Component[],
+	): void {
+		if (record.mode !== "ephemeral" || components.length === 0 || this.#ircExpiryTimers.has(record.observationId)) return;
+		const remainingMs = record.expiresAt! - Date.now();
+		if (remainingMs <= 0) return;
+		const timer = setTimeout(() => {
+			this.#ircExpiryTimers.delete(record.observationId);
+			this.#renderedIrcComponents.delete(record.observationId);
+			for (const component of components) {
+				this.ctx.chatContainer.removeChild(component);
+			}
+			this.ctx.ui.requestRender();
+		}, remainingMs);
+		timer.unref?.();
+		this.#ircExpiryTimers.set(record.observationId, timer);
 	}
 
 	async #handleSubagentSteerMessage(
@@ -360,26 +423,11 @@ export class EventController {
 		const signature = obsId
 			? `steer:${obsId}`
 			: `${event.message.role}:${event.message.customType}:${event.message.timestamp}:${details?.from}:${details?.to}:${details?.state}:${details?.body}`;
-		if (this.#renderedCustomMessages.has(signature)) {
-			return;
-		}
+		if (this.#renderedCustomMessages.has(signature)) return;
 		this.#renderedCustomMessages.add(signature);
 		this.#resetReadGroup();
 		this.ctx.addMessageToChat(event.message);
 		this.ctx.ui.requestRender();
-	}
-
-	#scheduleIrcExpiry(signature: string, components: Component[]): void {
-		if (components.length === 0 || this.#ircExpiryTimers.has(signature)) return;
-		const timer = setTimeout(() => {
-			this.#ircExpiryTimers.delete(signature);
-			for (const component of components) {
-				this.ctx.chatContainer.removeChild(component);
-			}
-			this.ctx.ui.requestRender();
-		}, IRC_MESSAGE_VISIBLE_TTL_MS);
-		timer.unref?.();
-		this.#ircExpiryTimers.set(signature, timer);
 	}
 
 	async #handleNotice(event: Extract<AgentSessionEvent, { type: "notice" }>): Promise<void> {
@@ -761,6 +809,9 @@ export class EventController {
 		} else if (event.errorMessage) {
 			this.ctx.showWarning(event.errorMessage);
 		} else if (isHandoffAction) {
+			// Reset BEFORE rebuild so the new session's transcript is not replayed
+			// from the old ledger and then cleared out from under its timers.
+			this.ctx.resetIrcSidebarSession();
 			this.ctx.chatContainer.clear();
 			this.ctx.rebuildChatFromMessages();
 			this.ctx.statusLine.invalidate();

@@ -58,6 +58,8 @@ describe("/handoff command", () => {
 			showStatus: vi.fn(),
 			showWarning: vi.fn(),
 			showError: vi.fn(),
+			resetIrcSidebarSession: vi.fn(),
+
 		} as unknown as InteractiveModeContext;
 		const controller = new CommandController(ctx);
 
@@ -75,6 +77,7 @@ describe("/handoff command", () => {
 		expect(statusContainer.children).toHaveLength(0);
 		expect(ctx.editor.onEscape).toBe(originalOnEscape);
 		expect(ctx.session.handoff).toHaveBeenCalledWith("focus on tests");
+		expect(ctx.resetIrcSidebarSession).toHaveBeenCalledTimes(1);
 	});
 
 	it("prepares contribution-pr artifacts without spawning a competing TUI worker", async () => {

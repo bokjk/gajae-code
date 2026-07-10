@@ -217,6 +217,7 @@ import type { PlanModeState } from "../plan-mode/state";
 import autoContinuePrompt from "../prompts/system/auto-continue.md" with { type: "text" };
 import eagerTodoPrompt from "../prompts/system/eager-todo.md" with { type: "text" };
 import ircIncomingTemplate from "../prompts/system/irc-incoming.md" with { type: "text" };
+import ircPeerRosterTemplate from "../prompts/system/irc-peer-roster.md" with { type: "text" };
 import planModeActivePrompt from "../prompts/system/plan-mode-active.md" with { type: "text" };
 import planModeReferencePrompt from "../prompts/system/plan-mode-reference.md" with { type: "text" };
 import planModeToolDecisionReminderPrompt from "../prompts/system/plan-mode-tool-decision-reminder.md" with {
@@ -1270,6 +1271,8 @@ export class AgentSession {
 	// Agent identity + registry for IRC relay forwarding to the main session UI.
 	#agentId: string | undefined;
 	#agentRegistry: AgentRegistry | undefined;
+	#lastDeliveredIrcRosterSignature: string | null = null;
+	#ircRosterClaim: { token: symbol; signature: string } | null = null;
 	#providerSessionId: string | undefined;
 	#providerCacheSessionId: string | undefined;
 	#isDisposed = false;
@@ -2389,14 +2392,19 @@ export class AgentSession {
 		if (event.type === "message_end") {
 			// Check if this is a hook/custom message
 			if (event.message.role === "hookMessage" || event.message.role === "custom") {
-				// Persist as CustomMessageEntry
-				this.sessionManager.appendCustomMessageEntry(
-					event.message.customType,
-					event.message.content,
-					event.message.display,
-					event.message.details,
-					event.message.attribution ?? "agent",
-				);
+				// Roster reminders are request-context-only: never persist them, or a
+				// reload would resurrect stale rosters into agent history.
+				const isRosterReminder = event.message.role === "custom" && event.message.customType === "irc-peer-roster";
+				if (!isRosterReminder) {
+					// Persist as CustomMessageEntry
+					this.sessionManager.appendCustomMessageEntry(
+						event.message.customType,
+						event.message.content,
+						event.message.display,
+						event.message.details,
+						event.message.attribution ?? "agent",
+					);
+				}
 				if (event.message.role === "custom" && event.message.customType === "ttsr-injection") {
 					this.#markTtsrInjected(this.#extractTtsrRuleNames(event.message.details));
 				}
@@ -5576,6 +5584,7 @@ export class AgentSession {
 	): Promise<void> {
 		this.#beginInFlight();
 		const generation = this.#promptGeneration;
+		const rosterClaim = this.#claimIrcRosterCandidate();
 		try {
 			// Flush any pending bash messages before the new prompt
 			this.#flushPendingBashMessages();
@@ -5627,6 +5636,9 @@ export class AgentSession {
 			}
 			const volatileProjectContextMessage = await this.#buildVolatileProjectContextMessage();
 			messages.push(volatileProjectContextMessage);
+			if (rosterClaim) {
+				messages.push(rosterClaim.message);
+			}
 			if (options?.prependMessages) {
 				messages.push(...options.prependMessages);
 			}
@@ -5731,10 +5743,21 @@ export class AgentSession {
 
 			const agentPromptOptions = options?.toolChoice ? { toolChoice: options.toolChoice } : undefined;
 			await this.#promptAgentWithIdleRetry(messages, agentPromptOptions);
+			if (rosterClaim) {
+				this.#commitIrcRosterClaim(rosterClaim.token);
+			}
 			if (!options?.skipPostPromptRecoveryWait) {
 				await this.#waitForPostPromptRecovery();
 			}
 		} finally {
+			if (rosterClaim) {
+				this.agent.replaceMessages(
+					this.agent.state.messages.filter(
+						candidate => !(candidate.role === "custom" && candidate.customType === "irc-peer-roster"),
+					),
+				);
+				this.#releaseIrcRosterClaim(rosterClaim.token);
+			}
 			this.#endInFlight();
 		}
 	}
@@ -6662,6 +6685,8 @@ export class AgentSession {
 		this.#planReferencePath = "local://PLAN.md";
 		this.#reconnectToAgent();
 
+		this.#resetIrcRosterDeliveryState();
+
 		// Emit session_switch event with reason "new" to hooks
 		if (this.#extensionRunner) {
 			await this.#extensionRunner.emit({
@@ -6768,6 +6793,8 @@ export class AgentSession {
 		// Update agent session ID
 		this.#syncAgentSessionId();
 		this.#rekeyHindsightMemoryForCurrentSessionId();
+
+		this.#resetIrcRosterDeliveryState();
 
 		// Emit session_switch event with reason "fork" to hooks
 		if (this.#extensionRunner) {
@@ -7707,6 +7734,8 @@ export class AgentSession {
 			// goal/plan-mode-context copy; clear the static-once signatures.
 			this.#resetInjectedContextSignatures();
 			this.#syncTodoPhasesFromBranch();
+
+			this.#resetIrcRosterDeliveryState();
 
 			return { document: handoffText, savedPath };
 		} catch (error) {
@@ -10254,17 +10283,19 @@ export class AgentSession {
 	}): Promise<{ replyText: string | null }> {
 		const awaitReply = args.awaitReply !== false;
 		const incomingTimestamp = Date.now();
+		const incomingObservationId = crypto.randomUUID();
 		const incomingRecord: CustomMessage = {
 			role: "custom",
 			customType: "irc:incoming",
 			content: `[IRC \`${args.from}\` → you]\n\n${args.message}`,
 			display: true,
-			details: { from: args.from, message: args.message },
+			details: { observationId: incomingObservationId, from: args.from, message: args.message },
 			attribution: "agent",
 			timestamp: incomingTimestamp,
 		};
 		void this.#emitSessionEvent({ type: "irc_message", message: incomingRecord });
 		this.#forwardIrcRelayToMain({
+			observationId: incomingObservationId,
 			from: args.from,
 			to: this.#agentId ?? "?",
 			body: args.message,
@@ -10286,17 +10317,19 @@ export class AgentSession {
 			signal: args.signal,
 		});
 
+		const replyObservationId = crypto.randomUUID();
 		const replyRecord: CustomMessage = {
 			role: "custom",
 			customType: "irc:autoreply",
 			content: `[IRC you → \`${args.from}\` (auto)]\n\n${replyText}`,
 			display: true,
-			details: { to: args.from, reply: replyText },
+			details: { observationId: replyObservationId, to: args.from, reply: replyText },
 			attribution: "agent",
 			timestamp: Date.now(),
 		};
 		void this.#emitSessionEvent({ type: "irc_message", message: replyRecord });
 		this.#forwardIrcRelayToMain({
+			observationId: replyObservationId,
 			from: this.#agentId ?? "?",
 			to: args.from,
 			body: replyText,
@@ -10315,6 +10348,7 @@ export class AgentSession {
 	 * it is NOT injected into the main agent's persisted history.
 	 */
 	#forwardIrcRelayToMain(args: {
+		observationId: string;
 		from: string;
 		to: string;
 		body: string;
@@ -10334,7 +10368,13 @@ export class AgentSession {
 			customType: "irc:relay",
 			content: `[IRC \`${args.from}\` ${arrow} \`${args.to}\`]\n\n${args.body}`,
 			display: true,
-			details: { from: args.from, to: args.to, body: args.body, kind: args.kind },
+			details: {
+				observationId: args.observationId,
+				from: args.from,
+				to: args.to,
+				body: args.body,
+				kind: args.kind,
+			},
 			attribution: "agent",
 			timestamp: args.timestamp,
 		};
@@ -10406,6 +10446,51 @@ export class AgentSession {
 		void this.#emitSessionEvent({ type: "subagent_steer_message", message: record });
 	}
 
+	#buildIrcRosterCandidate(): { signature: string; message: CustomMessage } | null {
+		const peers = (this.#agentRegistry?.listVisibleTo(this.#agentId ?? "") ?? [])
+			.map(peer => ({ id: peer.id, label: peer.rosterLabel || peer.displayName }))
+			.sort((left, right) => left.id.localeCompare(right.id));
+		const signature = JSON.stringify(peers);
+		if (peers.length === 0 && this.#lastDeliveredIrcRosterSignature === null) return null;
+		return {
+			signature,
+			message: {
+				role: "custom",
+				customType: "irc-peer-roster",
+				content: prompt.render(ircPeerRosterTemplate, {
+					roster: peers.map(peer => `${peer.id} (${peer.label})`).join(", "),
+				}),
+				display: false,
+				attribution: "agent",
+				timestamp: Date.now(),
+			},
+		};
+	}
+
+	#claimIrcRosterCandidate(): { token: symbol; message: CustomMessage } | null {
+		if (this.#ircRosterClaim) return null;
+		const candidate = this.#buildIrcRosterCandidate();
+		if (!candidate || candidate.signature === this.#lastDeliveredIrcRosterSignature) return null;
+		const token = Symbol("irc-roster");
+		this.#ircRosterClaim = { token, signature: candidate.signature };
+		return { token, message: candidate.message };
+	}
+
+	#commitIrcRosterClaim(token: symbol): void {
+		if (this.#ircRosterClaim?.token !== token) return;
+		this.#lastDeliveredIrcRosterSignature = this.#ircRosterClaim.signature;
+		this.#ircRosterClaim = null;
+	}
+
+	#releaseIrcRosterClaim(token: symbol): void {
+		if (this.#ircRosterClaim?.token === token) this.#ircRosterClaim = null;
+	}
+
+	#resetIrcRosterDeliveryState(): void {
+		this.#lastDeliveredIrcRosterSignature = null;
+		this.#ircRosterClaim = null;
+	}
+
 	/**
 	 * Run a single ephemeral side-channel turn against this session's current
 	 * model + system prompt + history.  No tools are used; the side request
@@ -10422,61 +10507,74 @@ export class AgentSession {
 		onTextDelta?: (delta: string) => void;
 		signal?: AbortSignal;
 	}): Promise<{ replyText: string; assistantMessage: AssistantMessage }> {
-		const model = this.model;
-		if (!model) {
-			throw new Error("No active model on session");
-		}
-		const apiKey = await this.#modelRegistry.getApiKey(model, this.sessionId);
-		if (!apiKey) {
-			throw new Error(`No API key for ${model.provider}/${model.id}`);
-		}
-
-		const snapshot = this.#buildEphemeralSnapshot(args.promptText);
-		const llmMessages = await this.convertMessagesToLlm(snapshot, args.signal);
-		const context: Context = {
-			systemPrompt: this.systemPrompt,
-			messages: llmMessages,
-			// Empty tools array: with toolChoice="none" some encoders still serialize the
-			// recipient's tool catalog and the model leaks raw call markup
-			// (<function_calls>, DSML envelopes) into IRC replies. Stripping tools here
-			// removes the surface entirely.
-			tools: [],
-		};
-		const options = this.prepareSimpleStreamOptions(
-			{
-				apiKey,
-				sessionId: this.sessionId,
-				reasoning: toReasoningEffort(this.thinkingLevel),
-				hideThinkingSummary: this.agent.hideThinkingSummary,
-				serviceTier: this.serviceTier,
-				signal: args.signal,
-				toolChoice: "none",
-			},
-			model.provider,
-		);
-
-		let replyText = "";
-		let assistantMessage: AssistantMessage | undefined;
-		const stream = streamSimple(model, context, options);
-		for await (const event of stream) {
-			if (event.type === "text_delta") {
-				replyText += event.delta;
-				if (args.onTextDelta) args.onTextDelta(event.delta);
-				continue;
+		const rosterClaim = this.#claimIrcRosterCandidate();
+		try {
+			const model = this.model;
+			if (!model) {
+				throw new Error("No active model on session");
 			}
-			if (event.type === "done") {
-				assistantMessage = event.message;
-				break;
+			const apiKey = await this.#modelRegistry.getApiKey(model, this.sessionId);
+			if (!apiKey) {
+				throw new Error(`No API key for ${model.provider}/${model.id}`);
 			}
-			if (event.type === "error") {
-				throw new Error(event.error.errorMessage || "Ephemeral turn failed");
-			}
-		}
 
-		if (!assistantMessage) {
-			throw new Error("Ephemeral turn ended without a final message");
+			const snapshot = this.#buildEphemeralSnapshot(
+				args.promptText,
+				rosterClaim ? [rosterClaim.message] : undefined,
+			);
+			const llmMessages = await this.convertMessagesToLlm(snapshot, args.signal);
+			const context: Context = {
+				systemPrompt: this.systemPrompt,
+				messages: llmMessages,
+				// Empty tools array: with toolChoice="none" some encoders still serialize the
+				// recipient's tool catalog and the model leaks raw call markup
+				// (<function_calls>, DSML envelopes) into IRC replies. Stripping tools here
+				// removes the surface entirely.
+				tools: [],
+			};
+			const options = this.prepareSimpleStreamOptions(
+				{
+					apiKey,
+					sessionId: this.sessionId,
+					reasoning: toReasoningEffort(this.thinkingLevel),
+					hideThinkingSummary: this.agent.hideThinkingSummary,
+					serviceTier: this.serviceTier,
+					signal: args.signal,
+					toolChoice: "none",
+				},
+				model.provider,
+			);
+
+			let replyText = "";
+			let assistantMessage: AssistantMessage | undefined;
+			const stream = streamSimple(model, context, options);
+			for await (const event of stream) {
+				if (event.type === "text_delta") {
+					replyText += event.delta;
+					if (args.onTextDelta) args.onTextDelta(event.delta);
+					continue;
+				}
+				if (event.type === "done") {
+					assistantMessage = event.message;
+					break;
+				}
+				if (event.type === "error") {
+					throw new Error(event.error.errorMessage || "Ephemeral turn failed");
+				}
+			}
+
+			if (!assistantMessage) {
+				throw new Error("Ephemeral turn ended without a final message");
+			}
+			if (rosterClaim) {
+				this.#commitIrcRosterClaim(rosterClaim.token);
+			}
+			return { replyText: dedupeIrcReply(replyText.trim()), assistantMessage };
+		} finally {
+			if (rosterClaim) {
+				this.#releaseIrcRosterClaim(rosterClaim.token);
+			}
 		}
-		return { replyText: dedupeIrcReply(replyText.trim()), assistantMessage };
 	}
 
 	/**
@@ -10485,7 +10583,7 @@ export class AgentSession {
 	 * the partial response in context, then appends the prompt as a virtual
 	 * user message.
 	 */
-	#buildEphemeralSnapshot(promptText: string): AgentMessage[] {
+	#buildEphemeralSnapshot(promptText: string, prependMessages?: AgentMessage[]): AgentMessage[] {
 		const messages = [...this.messages];
 		const streaming = this.agent.state.streamMessage;
 		if (streaming && streaming.role === "assistant") {
@@ -10516,6 +10614,7 @@ export class AgentSession {
 				}
 			}
 		}
+		if (prependMessages) messages.push(...prependMessages);
 		messages.push({
 			role: "user",
 			content: [{ type: "text", text: promptText }],
@@ -10727,7 +10826,9 @@ export class AgentSession {
 
 			if (switchingToDifferentSession) {
 				this.#resetHindsightConversationTrackingIfHindsight();
+				this.#resetIrcRosterDeliveryState();
 			}
+
 			this.#reconnectToAgent();
 			return true;
 		} catch (error) {
@@ -10849,6 +10950,8 @@ export class AgentSession {
 			this.#resetInjectedContextSignatures();
 			this.#closeCodexProviderSessionsForHistoryRewrite();
 		}
+
+		this.#resetIrcRosterDeliveryState();
 
 		return { selectedText, cancelled: false };
 	}

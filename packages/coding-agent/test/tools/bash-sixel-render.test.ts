@@ -5,6 +5,8 @@ import type { RenderResultOptions } from "@gajae-code/agent-core";
 import { getThemeByName, setThemeInstance } from "@gajae-code/coding-agent/modes/theme/theme";
 import { bashToolRenderer } from "@gajae-code/coding-agent/tools/bash";
 import { ImageProtocol, TERMINAL } from "@gajae-code/tui";
+import { IrcSplitViewComponent } from "@gajae-code/coding-agent/modes/components/irc-sidebar";
+import { IrcObservationLedger } from "@gajae-code/coding-agent/modes/irc-observation-ledger";
 import { sanitizeText } from "@gajae-code/utils";
 
 type MutableTerminalInfo = {
@@ -116,6 +118,28 @@ describe("bashToolRenderer", () => {
 
 		expect(lines.filter(line => line === sixel)).toHaveLength(1);
 		expect(lines.some(line => line.includes("ctrl+o to expand"))).toBe(false);
+
+	});
+	it("replaces SIXEL output with bordered text while rendered through the visible IRC split", async () => {
+		terminal.imageProtocol = ImageProtocol.Sixel;
+		const theme = await getThemeByName("red-claw");
+		expect(theme).toBeDefined();
+		const sixel = "\x1bPqabc\x1b\\";
+		const component = bashToolRenderer.renderResult(
+			{ content: [{ type: "text", text: sixel }], details: {}, isError: false },
+			{ expanded: true, isPartial: false },
+			theme!,
+			{ command: "echo sixel" },
+		);
+		const split = new IrcSplitViewComponent(component, new IrcObservationLedger());
+
+		expect(split.render(160).join("\n")).toContain(sixel);
+		split.setVisible(true);
+		const visible = split.render(160).join("\n");
+		expect(visible.match(/\[SIXEL image hidden while IRC sidebar is visible\]/g)).toHaveLength(1);
+		expect(visible).not.toContain("\x1bP");
+		split.setVisible(false);
+		expect(split.render(160).join("\n")).toContain(sixel);
 	});
 
 	it("highlights every line of a multi-line bash command in renderResult", async () => {
