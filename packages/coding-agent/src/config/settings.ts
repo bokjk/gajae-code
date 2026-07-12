@@ -498,12 +498,17 @@ export class Settings {
 		}
 	}
 
-	setGlobalModelRole(role: ModelRole | string, modelId: string): void {
+	setGlobalModelRole(role: ModelRole | string, modelId: string | undefined): void {
 		const current = shallowStringRecord(getByPath(this.#global, ["modelRoles"]));
+		if (modelId === undefined) {
+			const { [role]: _removed, ...remaining } = current;
+			this.set("modelRoles", remaining);
+			return;
+		}
 		this.set("modelRoles", { ...current, [role]: modelId });
 	}
 
-	setGlobalModelRoleAndFlush(role: ModelRole | string, modelId: string): Promise<void> {
+	setGlobalModelRoleAndFlush(role: ModelRole | string, modelId: string | undefined): Promise<void> {
 		const transaction = this.#globalModelRoleTail.then(async () => {
 			const hadModelRoles = Object.hasOwn(this.#global, "modelRoles");
 			const previousModelRoles = structuredClone(this.#global.modelRoles);

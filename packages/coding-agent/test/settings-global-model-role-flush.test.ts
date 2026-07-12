@@ -44,6 +44,24 @@ describe("Settings global model role durability", () => {
 		expect(settings.getGlobal("modelRoles")).toEqual({ default: "provider/selected:medium" });
 	});
 
+	it("removes a restored default selector without changing other durable roles", async () => {
+		// Given
+		await Bun.write(
+			configPath,
+			YAML.stringify({ modelRoles: { default: "provider/selected:medium", planner: "planner/model:high" } }),
+		);
+		const settings = await Settings.init({ cwd: projectDir, agentDir });
+
+		// When
+		await settings.setGlobalModelRoleAndFlush("default", undefined);
+
+		// Then
+		expect(YAML.parse(await Bun.file(configPath).text())).toEqual({
+			modelRoles: { planner: "planner/model:high" },
+		});
+		expect(settings.getGlobal("modelRoles")).toEqual({ planner: "planner/model:high" });
+	});
+
 	it("rolls back a rejected selector so an unrelated later save cannot retry it", async () => {
 		// Given
 		await Bun.write(configPath, YAML.stringify({ modelRoles: { default: "provider/original:low" } }));

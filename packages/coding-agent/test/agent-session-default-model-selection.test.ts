@@ -10,6 +10,7 @@ import { Settings } from "@gajae-code/coding-agent/config/settings";
 import { AgentSession } from "@gajae-code/coding-agent/session/agent-session";
 import { AuthStorage } from "@gajae-code/coding-agent/session/auth-storage";
 import { SessionManager } from "@gajae-code/coding-agent/session/session-manager";
+import { logger } from "@gajae-code/utils";
 import { createAssistantMessage } from "./helpers/agent-session-setup";
 
 const INITIAL_MODEL: Model = {
@@ -311,8 +312,12 @@ describe("AgentSession durable default model selection", () => {
 		expect(sessionManager.buildSessionContext().models.default).toBe("target-provider/after-failure");
 	});
 
-	it("keeps the durable selector and rejects when post-commit live apply fails", async () => {
+	it.each([
+		["the previous default", { default: "original-provider/original:low", planner: "planner/model:medium" }],
+		["no previous default", { planner: "planner/model:medium" }],
+	])("restores %s when post-commit live apply fails", async (_description, previousModelRoles) => {
 		// Given
+		settings.set("modelRoles", previousModelRoles);
 		vi.spyOn(session, "setModelTemporary").mockRejectedValue(new Error("live apply failed"));
 
 		// When
@@ -320,7 +325,30 @@ describe("AgentSession durable default model selection", () => {
 
 		// Then
 		await expect(selection).rejects.toThrow("live apply failed");
-		expect(settings.getGlobal("modelRoles")).toEqual({ default: "target-provider/reasoning:high" });
+		expect(settings.getGlobal("modelRoles")).toEqual(previousModelRoles);
 		expect(session.model).toBe(INITIAL_MODEL);
+	});
+
+	it("preserves the live apply error when restoring the durable default also fails", async () => {
+		// Given
+		const liveApplyError = new Error("live apply failed");
+		const rollbackError = new Error("durable rollback failed");
+		const originalDurableCommit = settings.setGlobalModelRoleAndFlush.bind(settings);
+		vi.spyOn(settings, "setGlobalModelRoleAndFlush").mockImplementation(async (role, modelId) => {
+			if (modelId === undefined) throw rollbackError;
+			await originalDurableCommit(role, modelId);
+		});
+		vi.spyOn(session, "setModelTemporary").mockRejectedValue(liveApplyError);
+		const rollbackWarning = vi.spyOn(logger, "warn");
+
+		// When
+		const selection = session.setDefaultModelSelection(targetModel(), Effort.High);
+
+		// Then
+		await expect(selection).rejects.toBe(liveApplyError);
+		expect(rollbackWarning).toHaveBeenCalledWith(
+			"Failed to restore durable default model selection after live apply failure",
+			{ error: "Error: durable rollback failed" },
+		);
 	});
 });

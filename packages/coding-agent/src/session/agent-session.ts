@@ -7016,11 +7016,21 @@ export class AgentSession {
 				resolveThinkingLevelForModel(model, model.thinking?.defaultLevel ?? this.thinkingLevel) ??
 				ThinkingLevel.Off;
 			await this.waitForIdle();
+			const previousDefaultModelRole = this.settings.getGlobal("modelRoles")?.default;
 			await this.settings.setGlobalModelRoleAndFlush(
 				"default",
 				formatModelSelectorValue(`${model.provider}/${model.id}`, effectiveLevel),
 			);
-			await this.setModelTemporary(model, effectiveLevel, { persistAsSessionDefault: true });
+			try {
+				await this.setModelTemporary(model, effectiveLevel, { persistAsSessionDefault: true });
+			} catch (error) {
+				await this.settings.setGlobalModelRoleAndFlush("default", previousDefaultModelRole).catch(rollbackError => {
+					logger.warn("Failed to restore durable default model selection after live apply failure", {
+						error: String(rollbackError),
+					});
+				});
+				throw error;
+			}
 			return { provider: model.provider, modelId: model.id, thinkingLevel: effectiveLevel };
 		} finally {
 			transaction.resolve();
