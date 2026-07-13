@@ -6,7 +6,7 @@ import { Agent } from "@gajae-code/agent-core";
 import { createMockModel, type MockModel, registerMockApi } from "@gajae-code/ai/providers/mock";
 import { Settings } from "@gajae-code/coding-agent/config/settings";
 import { AgentRegistry } from "@gajae-code/coding-agent/registry/agent-registry";
-import { AgentSession } from "@gajae-code/coding-agent/session/agent-session";
+import { AgentSession, type EphemeralTurnPurpose } from "@gajae-code/coding-agent/session/agent-session";
 import { convertToLlm } from "@gajae-code/coding-agent/session/messages";
 import { SessionManager } from "@gajae-code/coding-agent/session/session-manager";
 
@@ -96,8 +96,8 @@ async function prompt(harness: Harness, text = "hello"): Promise<void> {
 	await harness.session.prompt(text);
 }
 
-async function ephemeral(harness: Harness, text = "side request"): Promise<void> {
-	await harness.session.runEphemeralTurn({ promptText: text });
+async function ephemeral(harness: Harness, purpose: EphemeralTurnPurpose, text = "side request"): Promise<void> {
+	await harness.session.runEphemeralTurn({ purpose, promptText: text });
 }
 
 describe("AgentSession IRC roster delivery", () => {
@@ -156,12 +156,14 @@ describe("AgentSession IRC roster delivery", () => {
 		expect(deliveredRosters(harness)).toHaveLength(1);
 	});
 
-	it("applies the same changed-only roster rule to /btw ephemeral turns", async () => {
+	it("/btw neither carries nor consumes a changed roster", async () => {
 		const harness = createHarness();
 		addPeer(harness.registry);
-		await ephemeral(harness, "<btw>first</btw>");
-		await ephemeral(harness, "<btw>second</btw>");
 
+		await ephemeral(harness, "btw", "<btw>side</btw>");
+		expect(deliveredRosters(harness)).toHaveLength(0);
+
+		await ephemeral(harness, "background", "background carrier");
 		expect(deliveredRosters(harness)).toHaveLength(1);
 	});
 
@@ -180,7 +182,7 @@ describe("AgentSession IRC roster delivery", () => {
 
 		const main = prompt(harness, "main");
 		await Bun.sleep(0);
-		const side = ephemeral(harness);
+		const side = ephemeral(harness, "background");
 		release.resolve();
 		await Promise.all([main, side]);
 
@@ -257,14 +259,14 @@ describe("AgentSession IRC roster delivery", () => {
 		});
 		addPeer(harness.registry);
 
-		const staleTurn = ephemeral(harness, "stale side request");
+		const staleTurn = ephemeral(harness, "background", "stale side request");
 		await claimAcquired.promise;
 		await harness.session.newSession();
 		apiKey.resolve("test-key");
 		await staleTurn;
 
 		expect(deliveredRosters(harness)).toHaveLength(0);
-		await ephemeral(harness, "fresh side request");
+		await ephemeral(harness, "background", "fresh side request");
 		expect(deliveredRosters(harness)).toHaveLength(1);
 	});
 
@@ -276,9 +278,9 @@ describe("AgentSession IRC roster delivery", () => {
 		const harness = createHarness({ model });
 		addPeer(harness.registry);
 
-		await expect(ephemeral(harness)).rejects.toThrow("temporary failure");
+		await expect(ephemeral(harness, "background")).rejects.toThrow("temporary failure");
 		fail = false;
-		await ephemeral(harness);
+		await ephemeral(harness, "background");
 
 		const deliveries = deliveredRosters(harness);
 		expect(deliveries).toHaveLength(2);
@@ -296,12 +298,12 @@ describe("AgentSession IRC roster delivery", () => {
 		const harness = createHarness({ model });
 		addPeer(harness.registry, "1-Worker");
 
-		const first = ephemeral(harness);
+		const first = ephemeral(harness, "background");
 		await Bun.sleep(0);
 		addPeer(harness.registry, "2-Worker");
 		release.resolve();
 		await first;
-		await ephemeral(harness);
+		await ephemeral(harness, "background");
 
 		const deliveries = deliveredRosters(harness);
 		expect(deliveries).toHaveLength(2);
@@ -319,12 +321,12 @@ describe("AgentSession IRC roster delivery", () => {
 		const harness = createHarness({ model });
 		addPeer(harness.registry);
 
-		const first = ephemeral(harness);
+		const first = ephemeral(harness, "background");
 		await Bun.sleep(0);
 		await harness.session.newSession();
 		release.resolve();
 		await first;
-		await ephemeral(harness);
+		await ephemeral(harness, "background");
 
 		expect(deliveredRosters(harness)).toHaveLength(2);
 	});

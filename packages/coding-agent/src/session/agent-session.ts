@@ -682,6 +682,30 @@ function isLocalModelEndpoint(model: Model | undefined): boolean {
 }
 
 const IRC_REPLY_MAX_BYTES = 4096;
+const BTW_ESTABLISHMENT_TIMEOUT_MS = 15_000;
+
+export type EphemeralTurnPurpose = "btw" | "background";
+
+interface EphemeralTurnBaseArgs {
+	promptText: string;
+	onTextDelta?: (delta: string) => void;
+	signal?: AbortSignal;
+}
+
+export type EphemeralTurnArgs =
+	| (EphemeralTurnBaseArgs & { purpose: "btw"; deferRosterCommit?: never })
+	| (EphemeralTurnBaseArgs & {
+			purpose?: "background";
+			/** Defer the successful roster-claim commit until the caller accepts its exchange. */
+			deferRosterCommit?: boolean;
+	  });
+
+interface EphemeralTurnResult {
+	replyText: string;
+	assistantMessage: AssistantMessage;
+	commitRosterClaim?: () => void;
+	releaseRosterClaim?: () => void;
+}
 
 /**
  * Hard cap for {@link AgentSession.disposeChildSubprocesses}. A `SIGINT`/`SIGTERM` handler
@@ -747,9 +771,9 @@ function dedupeIrcReply(text: string): string {
  * `provider` is the target provider string (e.g. `"anthropic"`) and gates the
  * `account_uuid` and `device_id` lookups — only `"anthropic"` requests carry them.
  *
- * `sessionId` is forwarded to the auth-storage session-sticky lookup so that
- * multi-credential setups attribute to the same OAuth account used for the
- * actual API request rather than always picking the first credential.
+ * `sessionId` is emitted as request identity. `credentialSessionId` is forwarded
+ * to the auth-storage session-sticky lookup so an isolated side identity can
+ * retain the main session's selected provider account.
  *
  * `authStorage` is treated as optional so test fixtures that stub `modelRegistry`
  * without a real storage layer still work; the resolver simply skips the lookup
@@ -759,6 +783,7 @@ function buildSessionMetadata(
 	sessionId: string,
 	provider: string,
 	authStorage: AuthStorage | undefined,
+	credentialSessionId = sessionId,
 ): Record<string, unknown> {
 	const userId: Record<string, string> = { session_id: sessionId };
 	// Only look up account_uuid when the request is going to Anthropic. Injecting
@@ -766,7 +791,7 @@ function buildSessionMetadata(
 	// Anthropic-format-compatible proxies like cloudflare-ai-gateway or gitlab-duo)
 	// would leak the user's Anthropic identity to unrelated third-party APIs.
 	if (provider === "anthropic") {
-		const accountUuid = authStorage?.getOAuthAccountId("anthropic", sessionId);
+		const accountUuid = authStorage?.getOAuthAccountId("anthropic", credentialSessionId);
 		if (typeof accountUuid === "string" && accountUuid.length > 0) {
 			userId.account_uuid = accountUuid;
 			// Derive device_id from account_uuid so the payload matches the real CC
@@ -11017,6 +11042,7 @@ export class AgentSession {
 		// observation. The deferred roster claim is committed only after the pair
 		// below is accepted.
 		const { replyText, commitRosterClaim, releaseRosterClaim } = await this.runEphemeralTurn({
+			purpose: "background",
 			promptText: incomingPrompt,
 			signal: args.signal,
 			deferRosterCommit: true,
@@ -11227,28 +11253,23 @@ export class AgentSession {
 
 	/**
 	 * Run a single ephemeral side-channel turn against this session's current
-	 * model + system prompt + history.  No tools are used; the side request
-	 * does not block on, or interfere with, any in-flight main turn.  The
-	 * session's history and persisted state are NOT modified by this call.
-	 *
-	 * Used by `respondAsBackground` (IRC) and `BtwController` (`/btw`) to share
-	 * the snapshot + stream pipeline.  The snapshot includes any in-flight
-	 * streaming assistant text so the model sees the half-finished response
-	 * rather than missing context.
+	 * model + system prompt + history. No tools are used and session history is
+	 * not modified. Background turns retain the IRC/session behavior used by
+	 * autoreplies; `/btw` turns use an isolated committed-context policy.
 	 */
-	async runEphemeralTurn(args: {
-		promptText: string;
-		onTextDelta?: (delta: string) => void;
-		signal?: AbortSignal;
-		/** Defer the successful roster-claim commit until the caller accepts its exchange. */
-		deferRosterCommit?: boolean;
-	}): Promise<{
-		replyText: string;
-		assistantMessage: AssistantMessage;
-		commitRosterClaim?: () => void;
-		releaseRosterClaim?: () => void;
-	}> {
-		const rosterClaim = this.#claimIrcRosterCandidate();
+	async runEphemeralTurn(args: EphemeralTurnArgs): Promise<EphemeralTurnResult> {
+		args.signal?.throwIfAborted();
+		// `/btw` must capture committed state synchronously. In particular, do not
+		// consult agent.state.streamMessage: it belongs to the unresolved main turn.
+		const btwSnapshot =
+			args.purpose === "btw"
+				? this.#buildBtwEphemeralSnapshot(
+						cloneJsonValueForForkSeed(this.buildDisplaySessionContext().messages),
+						args.promptText,
+					)
+				: undefined;
+		const sideSessionId = args.purpose === "btw" ? `${this.sessionId}:btw:${crypto.randomUUID()}` : this.sessionId;
+		const rosterClaim = args.purpose !== "btw" ? this.#claimIrcRosterCandidate() : null;
 		let rosterClaimDeferred = false;
 		try {
 			const model = this.model;
@@ -11256,6 +11277,7 @@ export class AgentSession {
 				throw new Error("No active model on session");
 			}
 			const apiKey = await this.#modelRegistry.getApiKey(model, this.sessionId);
+			args.signal?.throwIfAborted();
 			if (!apiKey) {
 				throw new Error(`No API key for ${model.provider}/${model.id}`);
 			}
@@ -11267,58 +11289,126 @@ export class AgentSession {
 			if (rosterClaim && !rosterMessage) {
 				this.#releaseIrcRosterClaim(rosterClaim.token, rosterClaim.epoch);
 			}
-			let snapshot = this.#buildEphemeralSnapshot(args.promptText, rosterMessage ? [rosterMessage] : undefined);
+			let snapshot =
+				btwSnapshot ??
+				this.#buildBackgroundEphemeralSnapshot(args.promptText, rosterMessage ? [rosterMessage] : undefined);
 			let llmMessages = await this.convertMessagesToLlm(snapshot, args.signal);
+			args.signal?.throwIfAborted();
 			if (rosterMessage && !this.#isCurrentIrcRosterClaim(rosterClaim!.token, rosterClaim!.epoch)) {
 				this.#releaseIrcRosterClaim(rosterClaim!.token, rosterClaim!.epoch);
 				// Conversion is asynchronous, so rebuild without a claim invalidated while it awaited.
-				snapshot = this.#buildEphemeralSnapshot(args.promptText);
+				snapshot = this.#buildBackgroundEphemeralSnapshot(args.promptText);
 				llmMessages = await this.convertMessagesToLlm(snapshot, args.signal);
+				args.signal?.throwIfAborted();
 			}
 			const context: Context = {
 				systemPrompt: this.systemPrompt,
 				messages: llmMessages,
-				// Empty tools array: with toolChoice="none" some encoders still serialize the
-				// recipient's tool catalog and the model leaks raw call markup
-				// (<function_calls>, DSML envelopes) into IRC replies. Stripping tools here
-				// removes the surface entirely.
+				// Empty tools array removes the recipient's tool catalog from the side request.
 				tools: [],
 			};
-			const options = this.prepareSimpleStreamOptions(
-				{
-					apiKey,
-					sessionId: this.sessionId,
-					reasoning: toReasoningEffort(this.thinkingLevel),
-					hideThinkingSummary: this.agent.hideThinkingSummary,
-					serviceTier: this.serviceTier,
-					signal: args.signal,
-					toolChoice: "none",
-				},
-				model.provider,
-			);
 
 			let replyText = "";
 			let assistantMessage: AssistantMessage | undefined;
-			const stream = streamSimple(model, context, options);
-			for await (const event of stream) {
-				if (event.type === "text_delta") {
-					replyText += event.delta;
-					if (args.onTextDelta) args.onTextDelta(event.delta);
-					continue;
+			if (args.purpose === "btw") {
+				const establishmentAbort = new AbortController();
+				const requestSignal = args.signal
+					? AbortSignal.any([args.signal, establishmentAbort.signal])
+					: establishmentAbort.signal;
+				const timeoutError = new Error(
+					`/btw provider did not produce an event within ${BTW_ESTABLISHMENT_TIMEOUT_MS / 1000} seconds`,
+				);
+				timeoutError.name = "TimeoutError";
+				let establishmentTimer: NodeJS.Timeout | undefined;
+				try {
+					requestSignal.throwIfAborted();
+					const options: SimpleStreamOptions = {
+						apiKey,
+						sessionId: sideSessionId,
+						metadata: buildSessionMetadata(
+							sideSessionId,
+							model.provider,
+							this.#modelRegistry.authStorage,
+							this.sessionId,
+						),
+						reasoning: toReasoningEffort(this.thinkingLevel),
+						hideThinkingSummary: this.agent.hideThinkingSummary,
+						serviceTier: this.serviceTier,
+						signal: requestSignal,
+						toolChoice: "none",
+						requestMaxRetries: 0,
+						streamMaxRetries: 0,
+						streamFirstEventTimeoutMs: 0,
+					};
+					establishmentTimer = setTimeout(
+						() => establishmentAbort.abort(timeoutError),
+						BTW_ESTABLISHMENT_TIMEOUT_MS,
+					);
+					establishmentTimer.unref?.();
+					requestSignal.throwIfAborted();
+					const stream = streamSimple(model, context, options);
+					let receivedProviderEvent = false;
+					for await (const event of stream) {
+						if (!receivedProviderEvent && event.type !== "start") {
+							receivedProviderEvent = true;
+							clearTimeout(establishmentTimer);
+							establishmentTimer = undefined;
+						}
+						if (event.type === "text_delta") {
+							replyText += event.delta;
+							if (args.onTextDelta) args.onTextDelta(event.delta);
+							continue;
+						}
+						if (event.type === "done") {
+							assistantMessage = event.message;
+							break;
+						}
+						if (event.type === "error") {
+							throw new Error(event.error.errorMessage || "Ephemeral turn failed");
+						}
+					}
+					requestSignal.throwIfAborted();
+				} catch (error) {
+					if (establishmentAbort.signal.aborted && !args.signal?.aborted) throw timeoutError;
+					throw error;
+				} finally {
+					if (establishmentTimer) clearTimeout(establishmentTimer);
 				}
-				if (event.type === "done") {
-					assistantMessage = event.message;
-					break;
-				}
-				if (event.type === "error") {
-					throw new Error(event.error.errorMessage || "Ephemeral turn failed");
+			} else {
+				const options = this.prepareSimpleStreamOptions(
+					{
+						apiKey,
+						sessionId: this.sessionId,
+						reasoning: toReasoningEffort(this.thinkingLevel),
+						hideThinkingSummary: this.agent.hideThinkingSummary,
+						serviceTier: this.serviceTier,
+						signal: args.signal,
+						toolChoice: "none",
+					},
+					model.provider,
+				);
+				args.signal?.throwIfAborted();
+				const stream = streamSimple(model, context, options);
+				for await (const event of stream) {
+					if (event.type === "text_delta") {
+						replyText += event.delta;
+						if (args.onTextDelta) args.onTextDelta(event.delta);
+						continue;
+					}
+					if (event.type === "done") {
+						assistantMessage = event.message;
+						break;
+					}
+					if (event.type === "error") {
+						throw new Error(event.error.errorMessage || "Ephemeral turn failed");
+					}
 				}
 			}
 
 			if (!assistantMessage) {
 				throw new Error("Ephemeral turn ended without a final message");
 			}
-			if (rosterClaim && args.deferRosterCommit) {
+			if (rosterClaim && args.purpose !== "btw" && args.deferRosterCommit) {
 				rosterClaimDeferred = true;
 				let rosterClaimSettled = false;
 				const settleRosterClaim = (commit: boolean) => {
@@ -11348,13 +11438,17 @@ export class AgentSession {
 		}
 	}
 
+	/** Build a `/btw` snapshot from an already-cloned committed context. */
+	#buildBtwEphemeralSnapshot(messages: AgentMessage[], promptText: string): AgentMessage[] {
+		messages.push(this.#buildEphemeralPromptMessage(promptText));
+		return messages;
+	}
+
 	/**
-	 * Build a message snapshot for an ephemeral side-channel turn.  Includes
-	 * the in-flight streaming assistant message (if any) so the model sees
-	 * the partial response in context, then appends the prompt as a virtual
-	 * user message.
+	 * Build the legacy background snapshot, including an in-flight assistant
+	 * message and an optional IRC roster reminder.
 	 */
-	#buildEphemeralSnapshot(promptText: string, prependMessages?: AgentMessage[]): AgentMessage[] {
+	#buildBackgroundEphemeralSnapshot(promptText: string, prependMessages?: AgentMessage[]): AgentMessage[] {
 		const messages = [...this.messages];
 		const streaming = this.agent.state.streamMessage;
 		if (streaming && streaming.role === "assistant") {
@@ -11386,13 +11480,17 @@ export class AgentSession {
 			}
 		}
 		if (prependMessages) messages.push(...prependMessages);
-		messages.push({
+		messages.push(this.#buildEphemeralPromptMessage(promptText));
+		return messages;
+	}
+
+	#buildEphemeralPromptMessage(promptText: string): AgentMessage {
+		return {
 			role: "user",
 			content: [{ type: "text", text: promptText }],
 			attribution: "agent",
 			timestamp: Date.now(),
-		});
-		return messages;
+		};
 	}
 
 	#queueBackgroundExchangeInjection(messages: CustomMessage[], options?: { deferFlush?: boolean }): void {
