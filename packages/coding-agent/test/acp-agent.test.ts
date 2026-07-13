@@ -13,13 +13,13 @@ import type {
 import type { AssistantMessage, Model } from "@gajae-code/ai";
 import { getAgentDir, setAgentDir } from "@gajae-code/utils";
 import { resetSettingsForTest, Settings } from "../src/config/settings";
+import type { ContextUsage } from "../src/extensibility/extensions/types";
 import { ACP_BOOTSTRAP_RACE_GUARD_MS, AcpAgent, createAcpExtensionUiContext } from "../src/modes/acp/acp-agent";
 import { getThemeByName, setThemeInstance } from "../src/modes/theme/theme";
 import type { PlanModeState } from "../src/plan-mode/state";
 import type { AgentSession, AgentSessionEvent } from "../src/session/agent-session";
 import { SILENT_ABORT_MARKER } from "../src/session/messages";
 import { SessionManager } from "../src/session/session-manager";
-import type { ContextUsage } from "../src/extensibility/extensions/types";
 import { FileSessionStorage } from "../src/session/session-storage";
 
 const SESSION_UPDATE_VARIANTS = new Set([

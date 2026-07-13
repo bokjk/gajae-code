@@ -2,24 +2,24 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "bun:te
 import type { AgentSideConnection, PromptRequest, SessionNotification } from "@agentclientprotocol/sdk";
 import { Agent, type AgentMessage } from "@gajae-code/agent-core";
 import { calculateContextTokens, estimateMessageTokensHeuristic } from "@gajae-code/agent-core/compaction";
-import { AssistantMessageEventStream } from "@gajae-code/ai/utils/event-stream";
 import { type AssistantMessage, getBundledModel, type Model, type Usage } from "@gajae-code/ai";
+import { AssistantMessageEventStream } from "@gajae-code/ai/utils/event-stream";
 import { ModelRegistry } from "@gajae-code/coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@gajae-code/coding-agent/config/settings";
+import type { ExtensionRunner } from "@gajae-code/coding-agent/extensibility/extensions/runner";
 import type { ContextUsage } from "@gajae-code/coding-agent/extensibility/extensions/types";
 import { AcpAgent } from "@gajae-code/coding-agent/modes/acp/acp-agent";
-import type { ExtensionRunner } from "@gajae-code/coding-agent/extensibility/extensions/runner";
-import { StatusLineComponent } from "../src/modes/components/status-line";
+import { initTheme, theme } from "@gajae-code/coding-agent/modes/theme/theme";
 import {
 	computeContextBreakdown,
 	computeNonMessageTokens,
 	renderContextUsage,
 } from "@gajae-code/coding-agent/modes/utils/context-usage";
-import { initTheme, theme } from "@gajae-code/coding-agent/modes/theme/theme";
 import { AgentSession, type AgentSessionEvent } from "@gajae-code/coding-agent/session/agent-session";
 import { AuthStorage } from "@gajae-code/coding-agent/session/auth-storage";
 import { convertToLlm } from "@gajae-code/coding-agent/session/messages";
 import { SessionManager } from "@gajae-code/coding-agent/session/session-manager";
+import { StatusLineComponent } from "../src/modes/components/status-line";
 
 const contextWindow = 200_000;
 const sessions: AgentSession[] = [];
@@ -64,7 +64,10 @@ function estimateDisplayMessages(messages: readonly AgentMessage[]): number {
 	return tokens;
 }
 
-async function createSession(messages: AgentMessage[] = [], extensionRunner?: ExtensionRunner): Promise<{
+async function createSession(
+	messages: AgentMessage[] = [],
+	extensionRunner?: ExtensionRunner,
+): Promise<{
 	session: AgentSession;
 	sessionManager: SessionManager;
 }> {
@@ -361,7 +364,10 @@ describe("context usage SSOT red-team probes", () => {
 
 		try {
 			const created = await agent.newSession({ cwd: process.cwd(), mcpServers: [] });
-			await agent.prompt({ sessionId: created.sessionId, prompt: [{ type: "text", text: "zero usage" }] } as PromptRequest);
+			await agent.prompt({
+				sessionId: created.sessionId,
+				prompt: [{ type: "text", text: "zero usage" }],
+			} as PromptRequest);
 
 			const usageUpdate = updates.find(update => update.update.sessionUpdate === "usage_update");
 			expect(usageUpdate).toBeDefined();
@@ -409,7 +415,7 @@ describe("context usage SSOT red-team probes", () => {
 		const keptUserId = sessionManager.appendMessage(keptUser);
 		sessionManager.appendCompaction("summary", "summary", keptUserId, 1_000);
 		const compaction = sessionManager.getBranch().findLast(entry => entry.type === "compaction");
-		if (!compaction || compaction.type !== "compaction") throw new Error("Expected compaction boundary");
+		if (compaction?.type !== "compaction") throw new Error("Expected compaction boundary");
 		const boundaryTs = new Date(compaction.timestamp).getTime();
 		const positive = createAssistant({ usage: createUsage(150_000), timestamp: boundaryTs + 1 });
 		const zeroUsage = createAssistant({ usage: createUsage(0), timestamp: boundaryTs + 2 });
@@ -437,7 +443,7 @@ describe("context usage SSOT red-team probes", () => {
 		const firstKeptEntryId = sessionManager.appendMessage(firstKeptUser);
 		sessionManager.appendCompaction("first", "first", firstKeptEntryId, 1_000);
 		const firstCompaction = sessionManager.getBranch().findLast(entry => entry.type === "compaction");
-		if (!firstCompaction || firstCompaction.type !== "compaction") throw new Error("Expected first compaction boundary");
+		if (firstCompaction?.type !== "compaction") throw new Error("Expected first compaction boundary");
 		const firstBoundaryTs = new Date(firstCompaction.timestamp).getTime();
 		const betweenCompactions = createAssistant({ usage: createUsage(140_000), timestamp: firstBoundaryTs + 1 });
 		sessionManager.appendMessage(betweenCompactions);
@@ -447,7 +453,7 @@ describe("context usage SSOT red-team probes", () => {
 		const secondKeptEntryId = sessionManager.appendMessage(secondKeptUser);
 		sessionManager.appendCompaction("second", "second", secondKeptEntryId, 1_000);
 		const latestCompaction = sessionManager.getBranch().findLast(entry => entry.type === "compaction");
-		if (!latestCompaction || latestCompaction.type !== "compaction") throw new Error("Expected latest compaction boundary");
+		if (latestCompaction?.type !== "compaction") throw new Error("Expected latest compaction boundary");
 		const latestBoundaryTs = new Date(latestCompaction.timestamp).getTime();
 		expect(latestBoundaryTs).toBeGreaterThan(firstBoundaryTs);
 		const afterLatestCompaction = createAssistant({ usage: createUsage(150_000), timestamp: latestBoundaryTs + 1 });
@@ -590,10 +596,7 @@ describe("context usage SSOT red-team probes", () => {
 		const before = requireContextUsage(session);
 		const revision = sessionManager.revisionSnapshot();
 
-		session.agent.replaceMessages([
-			{ ...earlier, content: "replacement earlier content".repeat(400) },
-			{ ...last },
-		]);
+		session.agent.replaceMessages([{ ...earlier, content: "replacement earlier content".repeat(400) }, { ...last }]);
 		const after = requireContextUsage(session);
 
 		expect(session.messages).toHaveLength(2);
@@ -606,10 +609,7 @@ describe("context usage SSOT red-team probes", () => {
 	it("invalidates after real compaction and returns unknown until a new assistant responds", async () => {
 		const extensionRunner = {
 			hasHandlers: (eventType: string) => eventType === "session_before_compact",
-			emit: async (event: {
-				type: string;
-				preparation?: { firstKeptEntryId: string; tokensBefore: number };
-			}) => {
+			emit: async (event: { type: string; preparation?: { firstKeptEntryId: string; tokensBefore: number } }) => {
 				if (event.type !== "session_before_compact" || !event.preparation) return undefined;
 				return {
 					compaction: {
@@ -679,7 +679,7 @@ describe("context usage SSOT red-team probes", () => {
 		const { session } = await createSession([assistant]);
 		const liveAssistant = session.messages[0] as AssistantMessage;
 		const textBlock = liveAssistant.content[0];
-		if (!textBlock || textBlock.type !== "text") throw new Error("Expected text block");
+		if (textBlock?.type !== "text") throw new Error("Expected text block");
 
 		let previous = requireContextUsage(session);
 		for (let step = 0; step < 3; step++) {
@@ -690,5 +690,4 @@ describe("context usage SSOT red-team probes", () => {
 			previous = current;
 		}
 	});
-
 });

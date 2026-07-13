@@ -92,7 +92,7 @@ function requireContextUsage(session: AgentSession) {
 function appendCompactionBoundary(sessionManager: SessionManager, firstKeptEntryId: string): number {
 	sessionManager.appendCompaction("summary", "summary", firstKeptEntryId, 1_000);
 	const compaction = sessionManager.getBranch().findLast(entry => entry.type === "compaction");
-	if (!compaction || compaction.type !== "compaction") throw new Error("Expected compaction entry");
+	if (compaction?.type !== "compaction") throw new Error("Expected compaction entry");
 	return new Date(compaction.timestamp).getTime();
 }
 
@@ -250,7 +250,9 @@ describe("AgentSession context usage source of truth", () => {
 		session.agent.replaceMessages([anchor, nanTimestampAssistant]);
 
 		const usage = requireContextUsage(session);
-		expect(usage.tokens).toBe(calculateContextTokens(anchor.usage) + estimateDisplayMessages([nanTimestampAssistant]));
+		expect(usage.tokens).toBe(
+			calculateContextTokens(anchor.usage) + estimateDisplayMessages([nanTimestampAssistant]),
+		);
 		expect(usage.source).toBe("provider_anchor");
 	});
 });

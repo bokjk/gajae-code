@@ -49,7 +49,6 @@ export interface ContextBreakdown {
 	freeTokens: number;
 }
 
-
 function splitLastUserTurn(messages: readonly AgentMessage[]): {
 	regularMessagesTokens: number;
 	lastUserTurnTokens: number;
@@ -244,8 +243,16 @@ function percentString(part: number, whole: number, fractionDigits = 1): string 
 
 function buildLegendLines(breakdown: ContextBreakdown, theme: typeof Theme): string[] {
 	const lines: string[] = [];
-	const { model, contextWindow, categories, estimatedCategoryTotal, usedTokens, source, autoCompactBufferTokens, freeTokens } =
-		breakdown;
+	const {
+		model,
+		contextWindow,
+		categories,
+		estimatedCategoryTotal,
+		usedTokens,
+		source,
+		autoCompactBufferTokens,
+		freeTokens,
+	} = breakdown;
 
 	const modelName = model?.name ?? model?.id ?? "no model";
 	const modelId = model?.id ?? "unknown";

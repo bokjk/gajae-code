@@ -99,7 +99,8 @@ describe("AgentSession display context snapshot cache", () => {
 			})),
 		);
 
-		const materializationsBeforeWarmup = sessionManager.getObservabilityStatsForTests().getBranchMaterializerCallCount;
+		const materializationsBeforeWarmup =
+			sessionManager.getObservabilityStatsForTests().getBranchMaterializerCallCount;
 		const estimatesBeforeWarmup = getContextUsageEstimateCount(session);
 		requireContextUsage(session);
 		const materializationsAfterWarmup = sessionManager.getObservabilityStatsForTests().getBranchMaterializerCallCount;
