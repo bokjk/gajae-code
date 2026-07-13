@@ -1,9 +1,9 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
-import type { Component, TUI } from "@gajae-code/tui";
 import { KeybindingsManager } from "@gajae-code/coding-agent/config/keybindings";
 import { ExtensionUiController } from "@gajae-code/coding-agent/modes/controllers/extension-ui-controller";
 import { getThemeByName, setThemeInstance } from "@gajae-code/coding-agent/modes/theme/theme";
 import type { InteractiveModeContext } from "@gajae-code/coding-agent/modes/types";
+import type { Component, TUI } from "@gajae-code/tui";
 import { setKeybindings } from "@gajae-code/tui";
 
 type TestEditor = {
@@ -186,18 +186,18 @@ describe("qa-pet-restore-redteam", () => {
 
 	it("3. routes selector, input, and editor aborts through the pet-aware restore and resolves undefined", async () => {
 		for (const open of [
-			(ctx: TestContext, controller: ExtensionUiController, signal: AbortSignal) =>
+			(controller: ExtensionUiController, signal: AbortSignal) =>
 				controller.showHookSelector("Abort selector", ["Alpha"], { signal }),
-			(ctx: TestContext, controller: ExtensionUiController, signal: AbortSignal) =>
+			(controller: ExtensionUiController, signal: AbortSignal) =>
 				controller.showHookInput("Abort input", undefined, { signal }),
-			(ctx: TestContext, controller: ExtensionUiController, signal: AbortSignal) =>
+			(controller: ExtensionUiController, signal: AbortSignal) =>
 				controller.showHookEditor("Abort editor", undefined, { signal }),
 		]) {
 			const ctx = createControllerContext();
 			const pet = installPetRestore(ctx);
 			const controller = createController(ctx);
 			const abortController = new AbortController();
-			const result = open(ctx, controller, abortController.signal);
+			const result = open(controller, abortController.signal);
 
 			abortController.abort();
 			expect(await result).toBeUndefined();
@@ -279,10 +279,13 @@ describe("qa-pet-restore-redteam", () => {
 		const overlayController = createController(overlayContext);
 		const overlayComponent = { dispose: vi.fn() } as unknown as Component & { dispose: () => void };
 		let closeOverlay: ((result: string) => void) | undefined;
-		const overlay = overlayController.showHookCustom<string>((_ui, _theme, _keybindings, done) => {
-			closeOverlay = done;
-			return overlayComponent;
-		}, { overlay: true });
+		const overlay = overlayController.showHookCustom<string>(
+			(_ui, _theme, _keybindings, done) => {
+				closeOverlay = done;
+				return overlayComponent;
+			},
+			{ overlay: true },
+		);
 		await Bun.sleep(0);
 		expect(overlayContext.ui.showOverlay).toHaveBeenCalledTimes(1);
 		expect(overlayContext.editorContainer.children).toEqual([overlayContext.editor]);
@@ -309,7 +312,9 @@ describe("qa-pet-restore-redteam", () => {
 		const answeredPet = installPetRestore(answeredContext);
 		const answeredController = createController(answeredContext);
 		const abortController = new AbortController();
-		const answered = answeredController.showHookSelector("Answer then abort", ["Alpha"], { signal: abortController.signal });
+		const answered = answeredController.showHookSelector("Answer then abort", ["Alpha"], {
+			signal: abortController.signal,
+		});
 		answeredContext.hookSelector!.handleInput("\r");
 		expect(await answered).toBe("Alpha");
 		expect(() => abortController.abort()).not.toThrow();
