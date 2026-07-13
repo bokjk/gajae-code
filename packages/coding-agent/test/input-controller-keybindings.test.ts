@@ -723,6 +723,59 @@ describe("InputController keybinding setup", () => {
 		expect(ctx.pendingImages).toEqual([]);
 	});
 
+	it("preserves successor composer images while an input extension is awaiting", async () => {
+		const { InputController, ctx, editor, spies } = await createContext();
+		const firstImage: InteractiveModeContext["pendingImages"][number] = {
+			type: "image",
+			data: "first-image",
+			mimeType: "image/png",
+		};
+		const secondImage: InteractiveModeContext["pendingImages"][number] = {
+			type: "image",
+			data: "second-image",
+			mimeType: "image/png",
+		};
+		const extension = Promise.withResolvers<void>();
+		const emitInput = vi.fn(async () => {
+			await extension.promise;
+			return undefined;
+		});
+		(ctx.session as unknown as { extensionRunner: unknown }).extensionRunner = {
+			hasHandlers: () => true,
+			getShortcuts: () => [],
+			emitInput,
+		};
+		ctx.pendingImages = [firstImage];
+		const controller = new InputController(ctx);
+		controller.setupKeyHandlers();
+		controller.setupEditorSubmitHandler();
+
+		editor.setText("");
+		editor.onChange?.("");
+		const firstSubmit = editor.onSubmit?.("describe [image 1]");
+		expect(emitInput).toHaveBeenCalledTimes(1);
+
+		ctx.pendingImages = [...ctx.pendingImages, secondImage];
+		editor.setText("follow up [image 2]");
+		await Promise.resolve();
+		expect(ctx.pendingImages).toEqual([firstImage, secondImage]);
+
+		extension.resolve();
+		await firstSubmit;
+		expect(spies.startPendingSubmission).toHaveBeenNthCalledWith(1, {
+			text: "describe [image 1]",
+			images: [firstImage],
+		});
+		expect(ctx.pendingImages).toEqual([firstImage, secondImage]);
+
+		await editor.onSubmit?.("follow up [image 2]");
+		expect(spies.startPendingSubmission).toHaveBeenNthCalledWith(2, {
+			text: "follow up [image 2]",
+			images: [secondImage],
+		});
+		expect(ctx.pendingImages).toEqual([]);
+	});
+
 	it("still clears pending images after the composer is manually emptied", async () => {
 		const { InputController, ctx, editor } = await createContext();
 		const image: InteractiveModeContext["pendingImages"][number] = {
