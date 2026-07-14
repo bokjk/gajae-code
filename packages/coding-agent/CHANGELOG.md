@@ -14,6 +14,7 @@
 - Removed the `--mode rpc`, `--mode rpc-ui`, and `--mode bridge` external ingress modes. Machine clients must use the SDK WebSocket interfaces documented in `docs/sdk.md`; no RPC or Bridge compatibility path remains.
 - Documented the current GPT-5.6 Codex and combo profile mappings as product judgments, including the durable `opus-codex` `anthropic/claude-sonnet-5` planner override and `fable-opus-codex` `anthropic/claude-opus-4-8:medium` planner.
 ### Fixed
+- Startup continuation now participates in the existing managed fallback and in-flight recovery envelope, preventing a retryable resumed turn from publishing `agent_end`/idle before retry success, exhaustion, cancellation, or startup failure has settled (#2092).
 
 - Fenced SDK WebSocket lifecycle callbacks and request settlement to the owning retry cycle/socket incarnation, so stale open, close, error, message, and timeout delivery cannot reject or corrupt work on a replacement connection; sent mutations remain non-replayed and deterministic race regressions cover the reconnect boundary (#2164).
 - Owned LSP stdin `EPIPE` and `ERR_STREAM_DESTROYED` failures now terminalize and evict only the affected client, reject pending and stale requests with a stable transport-closed error, and permit clean client recreation without suppressing serialization or unrelated sink failures (#2138).

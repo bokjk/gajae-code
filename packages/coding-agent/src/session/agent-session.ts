@@ -5482,7 +5482,13 @@ export class AgentSession {
 		if (!canContinuePersistedHistory(this.agent.state.messages)) {
 			throw new Error("Cannot continue from persisted message history");
 		}
-		await this.agent.continue();
+		this.#beginInFlight();
+		try {
+			await this.agent.continue(this.#managedFallbackPromptOptions());
+			await this.#waitForPostPromptRecovery();
+		} finally {
+			this.#endInFlight();
+		}
 	}
 
 	buildDisplaySessionContext(): SessionContext {
