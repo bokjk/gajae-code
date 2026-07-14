@@ -12,6 +12,7 @@
 - Renamed the notifications SDK to the Gajae-Code SDK: `docs/notifications-sdk.md` is now `docs/sdk.md`, `src/notifications/` is now `src/sdk/bus/`, and `src/sdk.ts` is now the `src/sdk/` module directory. Old deep-import specifiers no longer resolve.
 - Moved SDK discovery from `.gjc/state/notifications/` to `.gjc/state/sdk/`. Restart sessions and daemons together when upgrading; the runtime does not dual-scan the old and new directories.
 - Removed the `--mode rpc`, `--mode rpc-ui`, and `--mode bridge` external ingress modes. Machine clients must use the SDK WebSocket interfaces documented in `docs/sdk.md`; no RPC or Bridge compatibility path remains.
+- Documented the current GPT-5.6 Codex and combo profile mappings as product judgments, including the durable `opus-codex` `anthropic/claude-sonnet-5` planner override and `fable-opus-codex` `anthropic/claude-opus-4-8:medium` planner.
 ### Fixed
 
 - Fenced SDK WebSocket lifecycle callbacks and request settlement to the owning retry cycle/socket incarnation, so stale open, close, error, message, and timeout delivery cannot reject or corrupt work on a replacement connection; sent mutations remain non-replayed and deterministic race regressions cover the reconnect boundary (#2164).
