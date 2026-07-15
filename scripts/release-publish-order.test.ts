@@ -503,7 +503,9 @@ describe("native release binary coverage", () => {
 	test("install tarball smoke includes linux x64 optional natives package", async () => {
 		const installer = await Bun.file(path.join(repoRoot, "scripts/install-tests/run-ci.sh")).text();
 		expect(installer).toContain("stage_linux_x64_optional_package");
-		expect(installer).toContain("for pkg in utils natives-linux-x64 natives ai agent tui stats coding-agent gajae-code");
+		expect(installer).toContain(
+			"for pkg in utils natives-linux-x64 natives ai agent bridge-client tui stats coding-agent gajae-code",
+		);
 		expect(installer).toContain("@gajae-code/natives-linux-x64");
 		expect(installer).toContain("gajae-code-natives-[0-9]*.tgz");
 	});
