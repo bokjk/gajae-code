@@ -432,9 +432,8 @@ describe("native release binary coverage", () => {
 		expect(workflow).toContain("pattern: pi-natives-${{ matrix.platform }}-${{ matrix.arch }}*-h${{ needs.rust-hash.outputs.hash }}");
 	});
 
-	test("tag publication uses the fail-closed named-job evidence chain and SDK closure", async () => {
+	test("tag publication uses the fail-closed named-job evidence chain", async () => {
 		const workflow = await Bun.file(path.join(repoRoot, ".github/workflows/ci.yml")).text();
-		const sdkClosure = workflowJob(workflow, "sdk_closure");
 		const releaseBinary = workflowJob(workflow, "release_binary");
 		const expectedEvidence = workflowJob(workflow, "release_npm_expected");
 		const npmPublish = workflowJob(workflow, "release_npm_publish");
@@ -442,10 +441,11 @@ describe("native release binary coverage", () => {
 		const githubVerify = workflowJob(workflow, "release_github_verify");
 		const finalize = workflowJob(workflow, "release_github_finalize");
 
-		expect(sdkClosure).toContain("run: bun run check:sdk-closure");
-		expect(sdkClosure).toContain("startsWith(github.ref, 'refs/tags/v') && !cancelled()");
-		expect(releaseBinary).toContain("needs: [check, sdk_closure, native_linux, native_release, rust-hash]");
-		expect(releaseBinary).toContain("needs.sdk_closure.result == 'success'");
+		// The SDK closure suite is deliberately NOT a release gate: it runs in
+		// Dev CI / main `check` (relevance-gated). Release tags gate on the
+		// build, test, and evidence chain below (maintainer decision, 0.11.0).
+		expect(workflow).not.toContain("sdk_closure:");
+		expect(releaseBinary).toContain("needs: [check, native_linux, native_release, rust-hash]");
 
 		expect(expectedEvidence).toContain("needs: [release_github_draft, release_context, release_source_verify, rust-hash]");
 		expect(expectedEvidence).toContain("needs.release_source_verify.result == 'success'");
