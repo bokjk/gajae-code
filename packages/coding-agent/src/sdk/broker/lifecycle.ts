@@ -1047,12 +1047,13 @@ function legacyMetadataCleanupPlan(cleanup: CleanupEvidence): CleanupEvidence | 
 		return undefined;
 	const root = path.resolve(cleanup.metadataRoot);
 	const directory = path.join(root, "sdk");
-	const allowedPaths = [lifecycleMarkerPath(root, cleanup.sessionId), lifecycleReadyPath(root, cleanup.sessionId)];
+	const markerPath = lifecycleMarkerPath(root, cleanup.sessionId);
+	const readyPath = lifecycleReadyPath(root, cleanup.sessionId);
 	const metadataPath = path.resolve(cleanup.metadataPath);
 	const plannedPath = path.resolve(cleanup.plannedMetadataPath);
 	const detachedPath = cleanup.detachedMetadataPath && path.resolve(cleanup.detachedMetadataPath);
 	if (
-		!allowedPaths.includes(metadataPath) ||
+		metadataPath !== markerPath ||
 		path.dirname(plannedPath) !== directory ||
 		!path.basename(plannedPath).startsWith(".gjc-delete-") ||
 		(detachedPath !== undefined && path.dirname(detachedPath) !== directory) ||
@@ -1060,8 +1061,57 @@ function legacyMetadataCleanupPlan(cleanup: CleanupEvidence): CleanupEvidence | 
 			(!Number.isSafeInteger(cleanup.metadataAttempt) || cleanup.metadataAttempt < 1))
 	)
 		return undefined;
-	const identity = cleanupIdentity(cleanup.metadataIdentity);
-	if (!identity) return undefined;
+	const persistedIdentity = cleanupIdentity(cleanup.metadataIdentity);
+	if (!persistedIdentity) return undefined;
+
+	const captureExactRegular = (
+		file: string,
+	): { kind: "absent" } | { kind: "present"; capture: LifecycleFileCapture } | undefined => {
+		try {
+			const stat = fsSync.lstatSync(file);
+			if (stat.isSymbolicLink() || !stat.isFile()) return undefined;
+			const capture = captureLifecycleFile(file, true);
+			return capture ? { kind: "present", capture } : undefined;
+		} catch (error) {
+			return (error as NodeJS.ErrnoException).code === "ENOENT" ? { kind: "absent" } : undefined;
+		}
+	};
+
+	const markerCandidates = [metadataPath, detachedPath, plannedPath].filter(
+		(candidate, index, candidates): candidate is string =>
+			typeof candidate === "string" && candidates.indexOf(candidate) === index,
+	);
+	let activeMarker: LifecycleFileCapture | undefined;
+	for (const candidate of markerCandidates) {
+		const current = captureExactRegular(candidate);
+		if (!current) return undefined;
+		if (current.kind === "absent") continue;
+		if (!sameLifecycleCleanupIdentity(current.capture.identity, serializeCleanupIdentity(persistedIdentity)))
+			return undefined;
+		if (activeMarker) return undefined;
+		activeMarker = current.capture;
+	}
+	if (!activeMarker) return undefined;
+	let marker: unknown;
+	try {
+		marker = JSON.parse(activeMarker.bytes.toString("utf8"));
+	} catch {
+		return undefined;
+	}
+	if (!isEffectMarker(marker)) return undefined;
+
+	const ready = captureExactRegular(readyPath);
+	if (!ready) return undefined;
+	if (ready.kind === "present") {
+		let readyMarker: unknown;
+		try {
+			readyMarker = JSON.parse(ready.capture.bytes.toString("utf8"));
+		} catch {
+			return undefined;
+		}
+		if (!isEffectMarker(readyMarker) || !sameEffectMarker(marker, readyMarker)) return undefined;
+	}
+
 	return {
 		phase: "lifecycle",
 		sessionId: cleanup.sessionId,
@@ -1069,12 +1119,28 @@ function legacyMetadataCleanupPlan(cleanup: CleanupEvidence): CleanupEvidence | 
 		lifecycleFiles: [
 			{
 				path: metadataPath,
-				identity: serializeCleanupIdentity(identity),
+				identity: serializeCleanupIdentity({
+					...activeMarker.identity,
+					size: Number(activeMarker.identity.size),
+				}),
 				attempt: cleanup.metadataAttempt ?? 1,
 				plannedPath,
 				...(detachedPath ? { detachedPath } : {}),
 				...(cleanup.metadataCompleted === true ? { completed: true as const } : {}),
 			},
+			...(ready.kind === "present"
+				? [
+						{
+							path: readyPath,
+							identity: serializeCleanupIdentity({
+								...ready.capture.identity,
+								size: Number(ready.capture.identity.size),
+							}),
+							attempt: 1,
+							plannedPath: path.join(directory, `.gjc-delete-${randomUUID()}-${path.basename(readyPath)}`),
+						},
+					]
+				: []),
 		],
 	};
 }
