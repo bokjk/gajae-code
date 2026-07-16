@@ -104,10 +104,16 @@ export async function createSharedLifecycleFixture(
 	const environment = createFixtureBrokerEnvironment(root, agentDir);
 	const started = await startFixtureBrokerWithLeaseForTest({ agentDir, env: environment });
 	const cleanup = createFixtureRootCleanup(root, agentDir, started.lease);
-	const workspaces = {
-		A: await managedWorkspace(root, agentDir, "A", sourceIds.A),
-		B: await managedWorkspace(root, agentDir, "B", sourceIds.B),
-	};
+	let workspaces: Record<"A" | "B", SharedLifecycleWorkspace>;
+	try {
+		workspaces = {
+			A: await managedWorkspace(root, agentDir, "A", sourceIds.A),
+			B: await managedWorkspace(root, agentDir, "B", sourceIds.B),
+		};
+	} catch (error) {
+		await cleanupFixtureRoot(cleanup);
+		throw error;
+	}
 	expect(workspaces.A.scope.directoryPath).not.toBe(workspaces.B.scope.directoryPath);
 	return {
 		root,

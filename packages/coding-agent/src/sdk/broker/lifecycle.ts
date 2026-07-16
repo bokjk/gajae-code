@@ -1024,54 +1024,38 @@ function validateLifecycleCleanupFile(root: string, id: string, file: LifecycleC
 	return cleanupIdentity(file.identity) !== undefined;
 }
 
-function metadataCleanupPlan(
+function lifecycleDeleteMetadataCleanupPlan(
 	metadataRoot: string,
 	id: string,
-	metadataPath: string,
-	identity: BrokerCleanupIdentity,
+	files: ReadonlyArray<{ metadataPath: string; metadata: LifecycleFileCapture }>,
 ): CleanupEvidence {
 	return {
-		phase: "metadata",
+		phase: "lifecycle",
 		sessionId: id,
 		metadataRoot,
-		metadataPath,
-		metadataIdentity: identity,
-		metadataAttempt: 1,
-		plannedMetadataPath: path.join(
-			path.dirname(metadataPath),
-			`.gjc-delete-${randomUUID()}-${path.basename(metadataPath)}`,
-		),
+		lifecycleFiles: files.map(({ metadataPath, metadata }) => ({
+			path: metadataPath,
+			identity: serializeCleanupIdentity({
+				dev: metadata.identity.dev,
+				ino: metadata.identity.ino,
+				size: Number(metadata.identity.size),
+				mtimeNs: metadata.identity.mtimeNs,
+				sha256: metadata.identity.sha256,
+			}),
+			attempt: 1,
+			plannedPath: path.join(
+				path.dirname(metadataPath),
+				`.gjc-delete-${randomUUID()}-${path.basename(metadataPath)}`,
+			),
+		})),
 	};
-}
-
-function isLifecycleMetadataPath(root: string, id: string, value: string): boolean {
-	const resolved = path.resolve(value);
-	return (
-		resolved === path.resolve(lifecycleMarkerPath(root, id)) ||
-		resolved === path.resolve(lifecycleReadyPath(root, id))
-	);
-}
-
-function validateMetadataCleanupPlan(cleanup: CleanupEvidence, id: string): boolean {
-	return (
-		cleanup.phase === "metadata" &&
-		typeof cleanup.metadataRoot === "string" &&
-		typeof cleanup.metadataPath === "string" &&
-		(cleanup.metadataAttempt === undefined ||
-			(Number.isSafeInteger(cleanup.metadataAttempt) && cleanup.metadataAttempt >= 1)) &&
-		typeof cleanup.plannedMetadataPath === "string" &&
-		isLifecycleMetadataPath(cleanup.metadataRoot, id, cleanup.metadataPath) &&
-		path.dirname(path.resolve(cleanup.plannedMetadataPath)) === path.dirname(path.resolve(cleanup.metadataPath)) &&
-		path.basename(cleanup.plannedMetadataPath).startsWith(".gjc-delete-") &&
-		(cleanup.detachedMetadataPath === undefined ||
-			path.dirname(path.resolve(cleanup.detachedMetadataPath)) === path.dirname(path.resolve(cleanup.metadataPath)))
-	);
 }
 
 async function reconcileLifecycleCleanup(
 	broker: Broker,
 	identity: string,
 	cleanup: CleanupEvidence,
+	completion: BrokerResponse = fail("spawn_failed", "No ready SDK endpoint remains available."),
 ): Promise<BrokerResponse> {
 	if (
 		cleanup.phase !== "lifecycle" ||
@@ -1178,7 +1162,7 @@ async function reconcileLifecycleCleanup(
 		lifecycleCleanupHooksForTest.get(broker)?.();
 	}
 	await syncDirectory(path.join(activeCleanup.metadataRoot!, "sdk"));
-	return fail("spawn_failed", "No ready SDK endpoint remains available.");
+	return completion;
 }
 
 async function readSessionLifecycleFailure(
@@ -2445,90 +2429,6 @@ async function executeLifecycleResponse(
 		if (record?.terminalUncertain)
 			return fail("terminal_uncertain", "Session ownership is uncertain and cannot be deleted safely.");
 		if (record?.live) return fail("live_session", "Refusing to delete a live session; close it first.");
-		if (cleanup?.phase === "metadata") {
-			const metadataIdentity = cleanupIdentity(cleanup.metadataIdentity);
-			if (!metadataIdentity || !validateMetadataCleanupPlan(cleanup, id))
-				return fail("terminal_uncertain", "Metadata cleanup replay lacks exact lifecycle metadata authority.");
-			const metadataCandidates = [
-				cleanup.metadataPath!,
-				cleanup.detachedMetadataPath,
-				cleanup.plannedMetadataPath!,
-			].filter(
-				(value, index, values): value is string => typeof value === "string" && values.indexOf(value) === index,
-			);
-			let activePath: string | undefined;
-			let marker: LifecycleFileCapture | undefined;
-			let foundUnauthorized = false;
-			for (const candidate of metadataCandidates) {
-				try {
-					const stat = fsSync.lstatSync(candidate);
-					if (stat.isSymbolicLink() || !stat.isFile()) {
-						foundUnauthorized = true;
-						continue;
-					}
-				} catch (error) {
-					if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
-					foundUnauthorized = true;
-					continue;
-				}
-				const current = captureLifecycleFile(candidate);
-				if (!current) {
-					foundUnauthorized = true;
-					continue;
-				}
-				if (
-					current.identity.dev === metadataIdentity.dev &&
-					current.identity.ino === metadataIdentity.ino &&
-					current.identity.size === BigInt(metadataIdentity.size) &&
-					current.identity.mtimeNs === metadataIdentity.mtimeNs &&
-					current.identity.sha256 === metadataIdentity.sha256 &&
-					!activePath
-				) {
-					activePath = candidate;
-					marker = current;
-				} else {
-					foundUnauthorized = true;
-				}
-			}
-			if (foundUnauthorized)
-				return fail("terminal_uncertain", "Lifecycle metadata marker changed before deferred cleanup.");
-			if (!marker || !activePath) {
-				const completedCleanup = { ...cleanup, metadataCompleted: true as const };
-				await broker.ledger.transition(identity, "effect_started", {
-					response: fail(
-						"cleanup_pending",
-						"Lifecycle metadata cleanup completion was durably reconciled.",
-						completedCleanup,
-					),
-				});
-				return { ok: true, result: { sessionId: id } };
-			}
-			let activeCleanup = cleanup;
-			if (cleanup.detachedMetadataPath || activePath === cleanup.plannedMetadataPath) {
-				activeCleanup = {
-					...cleanup,
-					detachedMetadataPath: activePath,
-					metadataAttempt: (cleanup.metadataAttempt ?? 1) + 1,
-					plannedMetadataPath: path.join(
-						path.dirname(cleanup.metadataPath!),
-						`.gjc-delete-${randomUUID()}-${path.basename(cleanup.metadataPath!)}`,
-					),
-				};
-				await broker.ledger.transition(identity, "effect_started", {
-					response: fail(
-						"cleanup_pending",
-						"Lifecycle metadata retry cleanup is preauthorized for durable reconciliation.",
-						activeCleanup,
-					),
-				});
-			}
-			const result = exactUnlinkLifecycleFile(activePath, marker.identity, activeCleanup.plannedMetadataPath!);
-			if (result.ok) return { ok: true, result: { sessionId: id } };
-			return fail("cleanup_pending", `Lifecycle metadata cleanup remains pending: ${result.code ?? "unknown"}`, {
-				...activeCleanup,
-				...(result.detachedPath ? { detachedMetadataPath: result.detachedPath } : {}),
-			});
-		}
 		const validated = await validateDeletePath(broker, input, id, record, cleanup);
 		if ("ok" in validated) return validated;
 		let cleanupTarget: VerifiedSessionDeleteTarget = {
@@ -2746,19 +2646,8 @@ async function executeLifecycleResponse(
 				return fail("terminal_uncertain", "Lifecycle metadata ownership could not be verified.");
 			lifecycleMetadata.push({ metadataPath, metadata });
 		}
-		for (const { metadataPath, metadata } of lifecycleMetadata) {
-			const metadataCleanup = metadataCleanupPlan(
-				validated.metadataRoot,
-				id,
-				metadataPath,
-				serializeCleanupIdentity({
-					dev: metadata.identity.dev,
-					ino: metadata.identity.ino,
-					size: Number(metadata.identity.size),
-					mtimeNs: metadata.identity.mtimeNs,
-					sha256: metadata.identity.sha256,
-				}),
-			);
+		const metadataCleanup = lifecycleDeleteMetadataCleanupPlan(validated.metadataRoot, id, lifecycleMetadata);
+		if (metadataCleanup.lifecycleFiles?.length) {
 			await broker.ledger.transition(identity, "effect_started", {
 				intendedSessionId: id,
 				response: fail(
@@ -2767,16 +2656,7 @@ async function executeLifecycleResponse(
 					metadataCleanup,
 				),
 			});
-			const result = exactUnlinkLifecycleFile(metadataPath, metadata.identity, metadataCleanup.plannedMetadataPath!);
-			if (!result.ok)
-				return fail(
-					"cleanup_pending",
-					`Saved session was deleted but lifecycle metadata cleanup is pending: ${result.code ?? "unknown"}`,
-					{
-						...metadataCleanup,
-						...(result.detachedPath ? { detachedMetadataPath: result.detachedPath } : {}),
-					},
-				);
+			return reconcileLifecycleCleanup(broker, identity, metadataCleanup, { ok: true, result: { sessionId: id } });
 		}
 		return { ok: true, result: { sessionId: id } };
 	}
@@ -2858,7 +2738,17 @@ export async function executeLifecycle(
 	identity: string,
 	cleanup?: CleanupEvidence,
 ): Promise<LifecycleExecutionOutcome> {
-	if (cleanup?.phase === "lifecycle") return { response: await reconcileLifecycleCleanup(broker, identity, cleanup) };
+	if (cleanup?.phase === "lifecycle")
+		return {
+			response: await reconcileLifecycleCleanup(
+				broker,
+				identity,
+				cleanup,
+				operation === "session.delete"
+					? { ok: true, result: { sessionId: cleanup.sessionId } }
+					: fail("spawn_failed", "No ready SDK endpoint remains available."),
+			),
+		};
 	const response = await executeLifecycleResponse(broker, operation, input, identity, cleanup);
 	const entry = broker.ledger.get(identity);
 	const priorDurableEffects = entry?.durableEffects;

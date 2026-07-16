@@ -1035,7 +1035,7 @@ describe("SDK broker identity and discovery", () => {
 		}
 	});
 
-	it("persists an identity-bound metadata quarantine plan before a failed exact detach", async () => {
+	it("persists an identity-bound lifecycle cleanup plan before a failed exact metadata detach", async () => {
 		const dir = await temp();
 		const cwd = path.join(dir, "workspace");
 		const stateRoot = path.join(cwd, ".gjc", "state");
@@ -1072,11 +1072,15 @@ describe("SDK broker identity and discovery", () => {
 				error: {
 					code: "cleanup_pending",
 					cleanup: {
-						phase: "metadata",
-						metadataPath: markerPath,
-						metadataIdentity: expect.objectContaining({ sha256: expect.any(String) }),
-						plannedMetadataPath: expect.stringMatching(/\.gjc-delete-.*\.lifecycle\.json$/),
-						detachedMetadataPath: expect.stringMatching(/\.gjc-delete-.*\.lifecycle\.json$/),
+						phase: "lifecycle",
+						lifecycleFiles: [
+							expect.objectContaining({
+								path: markerPath,
+								identity: expect.objectContaining({ sha256: expect.any(String) }),
+								plannedPath: expect.stringMatching(/\.gjc-delete-.*\.lifecycle\.json$/),
+								detachedPath: expect.stringMatching(/\.gjc-delete-.*\.lifecycle\.json$/),
+							}),
+						],
 					},
 				},
 			});
@@ -1093,9 +1097,13 @@ describe("SDK broker identity and discovery", () => {
 					response: expect.objectContaining({
 						error: expect.objectContaining({
 							cleanup: expect.objectContaining({
-								phase: "metadata",
-								metadataIdentity: expect.objectContaining({ sha256: expect.any(String) }),
-								plannedMetadataPath: expect.stringMatching(/\.gjc-delete-.*\.lifecycle\.json$/),
+								phase: "lifecycle",
+								lifecycleFiles: [
+									expect.objectContaining({
+										identity: expect.objectContaining({ sha256: expect.any(String) }),
+										plannedPath: expect.stringMatching(/\.gjc-delete-.*\.lifecycle\.json$/),
+									}),
+								],
 							}),
 						}),
 					}),
@@ -1119,11 +1127,12 @@ describe("SDK broker identity and discovery", () => {
 									| undefined,
 						)
 						.map(error => error?.cleanup as Record<string, unknown> | undefined)
-						.findLast(
-							cleanup =>
-								cleanup?.detachedMetadataPath === detachedQ1 && cleanup?.plannedMetadataPath !== detachedQ1,
-						);
-					plannedQ2 = pendingCleanup?.plannedMetadataPath as string | undefined;
+						.findLast(cleanup => {
+							const file = (cleanup?.lifecycleFiles as Record<string, unknown>[] | undefined)?.[0];
+							return file?.detachedPath === detachedQ1 && file?.plannedPath !== detachedQ1;
+						});
+					plannedQ2 = (pendingCleanup?.lifecycleFiles as Record<string, unknown>[] | undefined)?.[0]
+						?.plannedPath as string | undefined;
 					expect(plannedQ2).toEqual(expect.any(String));
 					expect(plannedQ2).not.toBe(detachedQ1);
 					expect((identity as { quarantineName?: string }).quarantineName).toBe(path.basename(plannedQ2!));

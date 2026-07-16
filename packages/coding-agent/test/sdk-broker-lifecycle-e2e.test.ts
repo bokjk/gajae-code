@@ -1009,6 +1009,94 @@ test("broker directly resumes and forks a canonical cold saved session with scop
 	}
 }, 30_000);
 
+test("broker replays one identity-bound lifecycle metadata cleanup plan after the first delete detach", async () => {
+	const root = await fs.mkdtemp(path.join(process.env.TMPDIR ?? "/tmp", "gjc-broker-delete-metadata-crash-"));
+	const agentDir = path.join(root, "agent");
+	const stateRoot = path.join(root, ".gjc", "state");
+	const saved = SessionManager.create(root, SessionManager.getDefaultSessionDir(root, agentDir));
+	let crashing: Broker | undefined;
+	let reopened: Broker | undefined;
+	try {
+		await saved.ensureOnDisk();
+		const sessionId = saved.getSessionId();
+		const sessionPath = saved.getSessionFile();
+		if (!sessionPath) throw new Error("Expected persisted delete transcript.");
+		await saved.close();
+
+		crashing = new Broker({ agentDir });
+		await crashing.start();
+		await expect(
+			crashing.handleRequest(
+				"session.resume",
+				{ cwd: root, stateRoot, sessionId, sessionPath },
+				"delete-metadata-resume",
+			),
+		).resolves.toMatchObject({ ok: true, result: { sessionId } });
+		await expect(
+			crashing.handleRequest("session.close", { sessionId }, "delete-metadata-close"),
+		).resolves.toMatchObject({
+			ok: true,
+			result: { sessionId },
+		});
+		await waitFor(
+			async () =>
+				(await fs.access(path.join(stateRoot, "sdk", `${sessionId}.json`)).then(
+					() => false,
+					() => true,
+				))
+					? true
+					: undefined,
+			"delete metadata endpoint cleanup",
+		);
+		const markerPath = path.join(stateRoot, "sdk", `${sessionId}.lifecycle.json`);
+		const readyPath = path.join(stateRoot, "sdk", `${sessionId}.lifecycle.ready.json`);
+		await expect(fs.stat(markerPath)).resolves.toBeDefined();
+		await expect(fs.stat(readyPath)).resolves.toBeDefined();
+		setLifecycleCleanupHookForTest(crashing, () => {
+			throw new Error("simulated crash after first delete metadata detach");
+		});
+		const deleteInput = { cwd: root, stateRoot, sessionId, sessionPath };
+		await expect(crashing.handleRequest("session.delete", deleteInput, "delete-metadata-crash")).rejects.toThrow(
+			"simulated crash after first delete metadata detach",
+		);
+		const rows = (await fs.readFile(path.join(agentDir, "sdk", "lifecycle-ledger.jsonl"), "utf8"))
+			.split("\n")
+			.filter(Boolean)
+			.map(line => JSON.parse(line) as Record<string, unknown>);
+		const persisted = rows.findLast(row => row.state === "effect_started");
+		const cleanup = (
+			persisted?.response as { error?: { cleanup?: { phase?: unknown; lifecycleFiles?: unknown[] } } } | undefined
+		)?.error?.cleanup;
+		expect(cleanup).toMatchObject({ phase: "lifecycle" });
+		expect(cleanup?.lifecycleFiles).toHaveLength(2);
+		expect(cleanup?.lifecycleFiles).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ path: markerPath, identity: expect.any(Object) }),
+				expect.objectContaining({ path: readyPath, identity: expect.any(Object) }),
+			]),
+		);
+		await expect(fs.stat(markerPath)).rejects.toThrow();
+		await expect(fs.stat(readyPath)).resolves.toBeDefined();
+
+		await crashing.stop();
+		crashing = undefined;
+		reopened = new Broker({ agentDir });
+		await reopened.start();
+		await expect(
+			reopened.handleRequest("session.delete", deleteInput, "delete-metadata-crash"),
+		).resolves.toMatchObject({
+			ok: true,
+			result: { sessionId },
+		});
+		await expect(fs.stat(markerPath)).rejects.toThrow();
+		await expect(fs.stat(readyPath)).rejects.toThrow();
+	} finally {
+		await crashing?.stop();
+		await reopened?.stop();
+		await fs.rm(root, { recursive: true, force: true });
+	}
+}, 30_000);
+
 test("broker terminalizes default command resolver failures", async () => {
 	const root = await fs.mkdtemp(path.join(process.env.TMPDIR ?? "/tmp", "gjc-broker-resolver-failure-"));
 	const agentDir = path.join(root, "agent");
