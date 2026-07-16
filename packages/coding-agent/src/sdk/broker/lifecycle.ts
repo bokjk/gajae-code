@@ -30,7 +30,7 @@ import {
 } from "../session-directory";
 import type { SdkStartupFailure, SdkStartupRollbackResult } from "../startup-capability";
 import type { Broker, BrokerCleanupEvidence, BrokerCleanupIdentity, BrokerResponse } from "./broker";
-
+import { decodeLifecycleUtf8, parseLifecycleJson } from "./lifecycle-codec";
 import type {
 	LifecycleCleanupProof,
 	LifecycleDurableEffectsReceipt,
@@ -704,7 +704,7 @@ async function readEffectMarker(file: string): Promise<EffectMarker | undefined>
 	try {
 		const captured = captureLifecycleFile(file, true, true);
 		if (!captured) return undefined;
-		const marker: unknown = JSON.parse(captured.bytes.toString("utf8"));
+		const marker: unknown = parseLifecycleJson(captured.bytes);
 		return isExactEffectMarker(marker) ? marker : undefined;
 	} catch {
 		return undefined;
@@ -914,11 +914,11 @@ async function readLifecycleFailureArtifact(
 		const { bytesRead } = await handle.read(bytes, 0, bytes.length, 0);
 		if (bytesRead > 4096) return undefined;
 		const raw = bytes.subarray(0, bytesRead);
-		const value: unknown = JSON.parse(raw.toString("utf8"));
+		const value: unknown = parseLifecycleJson(raw);
 		if (
 			!isLifecycleFailureArtifact(value) ||
 			!sameEffectMarker(value, expected) ||
-			canonicalJson(value) !== raw.toString("utf8")
+			canonicalJson(value) !== decodeLifecycleUtf8(raw)
 		)
 			return undefined;
 		return {
@@ -987,7 +987,7 @@ function lifecycleCleanupPlan(
 		if (file === lifecycleMarkerPath(root, id) || file === lifecycleReadyPath(root, id)) {
 			let marker: unknown;
 			try {
-				marker = JSON.parse(captured.bytes.toString("utf8"));
+				marker = parseLifecycleJson(captured.bytes);
 			} catch {
 				throw new Error("Lifecycle marker changed before cleanup intent persistence.");
 			}
@@ -997,7 +997,7 @@ function lifecycleCleanupPlan(
 		if (file.endsWith(`${id}.json`)) {
 			let endpoint: { pid?: unknown };
 			try {
-				endpoint = JSON.parse(captured.bytes.toString("utf8")) as { pid?: unknown };
+				endpoint = parseLifecycleJson(captured.bytes) as { pid?: unknown };
 			} catch {
 				throw new Error("Lifecycle endpoint changed before cleanup intent persistence.");
 			}
@@ -1255,7 +1255,7 @@ function validateLifecycleMetadataReplay(cleanup: CleanupEvidence): BrokerRespon
 	if (!ready) return undefined;
 	let readyMarker: EffectMarker;
 	try {
-		const value: unknown = JSON.parse(ready.bytes.toString("utf8"));
+		const value: unknown = parseLifecycleJson(ready.bytes);
 		if (!isExactEffectMarker(value)) throw new Error("invalid ready marker");
 
 		readyMarker = value;
@@ -1273,7 +1273,7 @@ function validateLifecycleMetadataReplay(cleanup: CleanupEvidence): BrokerRespon
 		return undefined;
 	}
 	try {
-		const value: unknown = JSON.parse(marker.bytes.toString("utf8"));
+		const value: unknown = parseLifecycleJson(marker.bytes);
 		if (!isExactEffectMarker(value) || !sameEffectMarker(value, readyMarker)) throw new Error("mismatched marker");
 	} catch {
 		return fail("terminal_uncertain", "Lifecycle metadata siblings do not share one owner marker.");
@@ -1295,8 +1295,25 @@ function lifecycleMetadataReplayAbsent(cleanup: CleanupEvidence): boolean {
  * Base dev persisted metadata cleanup one file at a time. Accept only its
  * identity-bound marker receipt and translate it into the current replay plan.
  */
+function hasExactLegacyMetadataCleanupKeys(cleanup: CleanupEvidence): boolean {
+	if (typeof cleanup !== "object" || cleanup === null || Array.isArray(cleanup)) return false;
+	const allowed = new Set([
+		"phase",
+		"sessionId",
+		"metadataRoot",
+		"metadataIdentity",
+		"metadataPath",
+		"metadataAttempt",
+		"plannedMetadataPath",
+		"detachedMetadataPath",
+		"metadataCompleted",
+	]);
+	return Object.keys(cleanup as Record<string, unknown>).every(key => allowed.has(key));
+}
+
 function legacyMetadataCleanupPlan(cleanup: CleanupEvidence): CleanupEvidence | undefined {
 	if (
+		!hasExactLegacyMetadataCleanupKeys(cleanup) ||
 		cleanup.phase !== "metadata" ||
 		typeof cleanup.sessionId !== "string" ||
 		!isCanonicalSessionId(cleanup.sessionId) ||
@@ -1365,7 +1382,7 @@ function legacyMetadataCleanupPlan(cleanup: CleanupEvidence): CleanupEvidence | 
 	let marker: EffectMarker | undefined;
 	if (activeMarker) {
 		try {
-			const value: unknown = JSON.parse(activeMarker.bytes.toString("utf8"));
+			const value: unknown = parseLifecycleJson(activeMarker.bytes);
 			if (!isExactEffectMarker(value)) return undefined;
 
 			marker = value;
@@ -1379,7 +1396,7 @@ function legacyMetadataCleanupPlan(cleanup: CleanupEvidence): CleanupEvidence | 
 	let readyMarker: EffectMarker | undefined;
 	if (ready.kind === "present") {
 		try {
-			const value: unknown = JSON.parse(ready.capture.bytes.toString("utf8"));
+			const value: unknown = parseLifecycleJson(ready.capture.bytes);
 			if (!isExactEffectMarker(value)) return undefined;
 
 			readyMarker = value;
@@ -1480,7 +1497,7 @@ function preflightLifecycleDeleteMetadata(
 		if (!metadata) continue;
 		let marker: unknown;
 		try {
-			marker = JSON.parse(metadata.bytes.toString("utf8"));
+			marker = parseLifecycleJson(metadata.bytes);
 		} catch {
 			return fail("terminal_uncertain", "Lifecycle metadata ownership could not be verified.");
 		}
@@ -1763,7 +1780,7 @@ async function removeOwnedLifecycleArtifacts(root: string, id: string, expected:
 	if (endpoint && endpointSource) {
 		let parsed: { pid?: unknown };
 		try {
-			parsed = JSON.parse(endpoint.bytes.toString("utf8")) as { pid?: unknown };
+			parsed = parseLifecycleJson(endpoint.bytes) as { pid?: unknown };
 		} catch {
 			return false;
 		}

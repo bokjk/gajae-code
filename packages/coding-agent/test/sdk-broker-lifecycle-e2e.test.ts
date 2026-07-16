@@ -21,6 +21,7 @@ import {
 	setProcessIncarnationForTest,
 	writeSessionLifecycleFailure,
 } from "../src/sdk/broker/lifecycle";
+import { parseLifecycleJson } from "../src/sdk/broker/lifecycle-codec";
 import { LifecycleLedger } from "../src/sdk/broker/lifecycle-ledger";
 import { SessionIndex } from "../src/sdk/broker/session-index";
 import { runSdkSessionCli } from "../src/sdk/cli";
@@ -135,6 +136,127 @@ test("ledger restart quarantines terminal response and durable-effect digest cor
 		);
 	} finally {
 		await fs.rm(agentDir, { recursive: true, force: true });
+	}
+});
+
+test("fatal lifecycle JSON decoding rejects malformed UTF-8 without mutating valid non-ASCII data", () => {
+	const valid = Buffer.from('{"message":"résumé"}', "utf8");
+	expect(parseLifecycleJson(valid)).toEqual({ message: "résumé" });
+	const malformed = Buffer.concat([Buffer.from('{"message":"ok'), Buffer.from([0xc3, 0x28]), Buffer.from('"}')]);
+	expect(() => parseLifecycleJson(malformed)).toThrow();
+	expect(valid.equals(Buffer.from('{"message":"résumé"}', "utf8"))).toBe(true);
+});
+
+test("ledger reopen bounds malformed persisted rows before they gain cleanup authority", async () => {
+	const agentDir = await fs.mkdtemp(path.join(process.env.TMPDIR ?? "/tmp", "gjc-ledger-bounds-"));
+	const ledgerPath = path.join(agentDir, "sdk", "lifecycle-ledger.jsonl");
+	const corruptPath = `${ledgerPath}.corrupt`;
+	const cleanupSentinel = path.join(agentDir, "cleanup-sentinel");
+	try {
+		const ledger = await new LifecycleLedger(agentDir).open();
+		await ledger.begin("safe", "request");
+		await fs.writeFile(cleanupSentinel, "preserve");
+		const validRow = JSON.parse((await fs.readFile(ledgerPath, "utf8")).trim()) as Record<string, unknown>;
+		const malformedUtf8 = Buffer.concat([
+			Buffer.from(`${JSON.stringify({ ...validRow, identity: "malformed" }).slice(0, -2)}"`),
+			Buffer.from([0xc3, 0x28]),
+			Buffer.from("}\n"),
+		]);
+		await fs.appendFile(ledgerPath, malformedUtf8);
+		const malformedBroker = new Broker({ agentDir });
+		await malformedBroker.start();
+		expect((await malformedBroker.ledger.begin("safe", "request")).kind).toBe("terminal_uncertain");
+		await malformedBroker.stop();
+		expect(await fs.readFile(cleanupSentinel, "utf8")).toBe("preserve");
+		expect((await fs.readFile(corruptPath)).includes(Buffer.from([0xc3, 0x28]))).toBe(true);
+
+		for (const [identity, response] of [
+			[
+				"deep",
+				{
+					nested: Array.from({ length: 66 }, () => ({ value: "x" })).reduce(
+						(value, _next) => ({ next: value }),
+						{},
+					),
+				},
+			],
+			[
+				"wide",
+				{ fields: Object.fromEntries(Array.from({ length: 1_025 }, (_, index) => [`field-${index}`, index])) },
+			],
+		] as const) {
+			await fs.appendFile(ledgerPath, `${JSON.stringify({ ...validRow, identity, response })}\n`);
+		}
+		const boundedBroker = new Broker({ agentDir });
+		await boundedBroker.start();
+		expect((await boundedBroker.ledger.begin("safe", "request")).kind).toBe("terminal_uncertain");
+		await boundedBroker.stop();
+		expect(await fs.readFile(cleanupSentinel, "utf8")).toBe("preserve");
+		const quarantined = await fs.readFile(corruptPath, "utf8");
+		expect(quarantined).toContain('"identity":"deep"');
+		expect(quarantined).toContain('"identity":"wide"');
+
+		const expectStartFailure = async (name: string, content: string, message: string) => {
+			const boundedAgentDir = path.join(agentDir, name);
+			const boundedLedgerPath = path.join(boundedAgentDir, "sdk", "lifecycle-ledger.jsonl");
+			await fs.mkdir(path.dirname(boundedLedgerPath), { recursive: true });
+			await fs.writeFile(boundedLedgerPath, content);
+			const broker = new Broker({ agentDir: boundedAgentDir });
+			try {
+				await expect(broker.start()).rejects.toThrow(message);
+			} finally {
+				await broker.stop();
+			}
+		};
+		await expectStartFailure("line-bound", "x".repeat(64 * 1024 + 1), "maximum byte length");
+		await expectStartFailure("row-bound", "{}\n".repeat(10_001), "maximum row count");
+		await expectStartFailure("file-bound", "x".repeat(8 * 1024 * 1024 + 1), "maximum file byte length");
+		expect(await fs.readFile(cleanupSentinel, "utf8")).toBe("preserve");
+	} finally {
+		await fs.rm(agentDir, { recursive: true, force: true });
+	}
+}, 30_000);
+
+test("legacy metadata cleanup rejects mixed lifecycle and arbitrary receipt keys before mutation", async () => {
+	const root = await fs.mkdtemp(path.join(process.env.TMPDIR ?? "/tmp", "gjc-legacy-metadata-allowlist-"));
+	const stateRoot = path.join(root, ".gjc", "state");
+	const sessionId = "legacy-allowlist";
+	const markerPath = path.join(stateRoot, "sdk", `${sessionId}.lifecycle.json`);
+	const readyPath = path.join(stateRoot, "sdk", `${sessionId}.lifecycle.ready.json`);
+	const marker = canonicalJson({ pid: process.pid, effectMarker: "legacy", incarnation: "legacy" });
+	try {
+		await fs.mkdir(path.dirname(markerPath), { recursive: true });
+		await fs.writeFile(markerPath, marker);
+		await fs.writeFile(readyPath, marker);
+		const [stat, bytes] = await Promise.all([fs.stat(markerPath, { bigint: true }), fs.readFile(markerPath)]);
+		const cleanup: BrokerCleanupEvidence = {
+			phase: "metadata",
+			sessionId,
+			metadataRoot: stateRoot,
+			metadataPath: markerPath,
+			metadataIdentity: {
+				dev: stat.dev.toString(),
+				ino: stat.ino.toString(),
+				size: Number(stat.size),
+				mtimeNs: stat.mtimeNs.toString(),
+				sha256: createHash("sha256").update(bytes).digest("hex"),
+			},
+			plannedMetadataPath: path.join(stateRoot, "sdk", `.gjc-delete-${sessionId}.lifecycle.json`),
+		};
+		for (const extra of [{ lifecycleFiles: [] }, { lifecycleDeleteMetadata: true }, { arbitrary: true }]) {
+			const outcome = await executeLifecycle(
+				new Broker({ agentDir: path.join(root, "agent") }),
+				"session.delete",
+				{},
+				"legacy-allowlist",
+				{ ...cleanup, ...extra } as BrokerCleanupEvidence,
+			);
+			expect(outcome.response).toMatchObject({ ok: false, error: { code: "terminal_uncertain" } });
+			expect(await fs.readFile(markerPath, "utf8")).toBe(marker);
+			expect(await fs.readFile(readyPath, "utf8")).toBe(marker);
+		}
+	} finally {
+		await fs.rm(root, { recursive: true, force: true });
 	}
 });
 

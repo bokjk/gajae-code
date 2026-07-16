@@ -1,7 +1,9 @@
 import { createHash } from "node:crypto";
+import * as fsSync from "node:fs";
 import * as fs from "node:fs/promises";
 import path from "node:path";
 import type { SdkStartupFailure, SdkStartupRollbackResult } from "../startup-capability";
+import { parseLifecycleJson } from "./lifecycle-codec";
 import { assertSupportedStateVersion, SDK_STATE_VERSION } from "./state-version";
 
 export type LifecycleState =
@@ -87,6 +89,46 @@ export type BeginResult =
 	| { kind: "terminal_uncertain"; entry: LifecycleLedgerEntry }
 	| { kind: "in_progress"; entry: LifecycleLedgerEntry };
 const terminal = (s: LifecycleState) => s === "terminal_ok" || s === "terminal_error";
+const MAX_LIFECYCLE_LEDGER_BYTES = 8 * 1024 * 1024;
+const MAX_LIFECYCLE_LEDGER_LINE_BYTES = 64 * 1024;
+const MAX_LIFECYCLE_LEDGER_ROWS = 10_000;
+const MAX_LIFECYCLE_LEDGER_JSON_DEPTH = 64;
+const MAX_LIFECYCLE_LEDGER_JSON_FIELDS = 1024;
+
+function isBoundedLedgerJson(value: unknown, depth = 0, budget = { fields: 0 }): boolean {
+	if (depth > MAX_LIFECYCLE_LEDGER_JSON_DEPTH) return false;
+	if (value === null || typeof value !== "object") return true;
+	if (Array.isArray(value)) {
+		if (value.length > MAX_LIFECYCLE_LEDGER_JSON_FIELDS) return false;
+		return value.every(item => isBoundedLedgerJson(item, depth + 1, budget));
+	}
+	const record = value as Record<string, unknown>;
+	const keys = Object.keys(record);
+	budget.fields += keys.length;
+	return (
+		budget.fields <= MAX_LIFECYCLE_LEDGER_JSON_FIELDS &&
+		keys.every(key => isBoundedLedgerJson(record[key], depth + 1, budget))
+	);
+}
+
+function isLifecycleLedgerEntry(value: unknown): value is LifecycleLedgerEntry {
+	if (typeof value !== "object" || value === null || Array.isArray(value) || !isBoundedLedgerJson(value)) return false;
+	const entry = value as Partial<LifecycleLedgerEntry>;
+	return (
+		typeof entry.identity === "string" &&
+		entry.identity.length > 0 &&
+		typeof entry.requestHash === "string" &&
+		entry.requestHash.length > 0 &&
+		(entry.state === "accepted" ||
+			entry.state === "effect_started" ||
+			entry.state === "awaiting_ready" ||
+			entry.state === "terminal_ok" ||
+			entry.state === "terminal_error" ||
+			entry.state === "terminal_uncertain") &&
+		typeof entry.ts === "number" &&
+		Number.isSafeInteger(entry.ts)
+	);
+}
 function canonicalJson(value: unknown): string {
 	if (value === null || typeof value !== "object") return JSON.stringify(value);
 	if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
@@ -121,42 +163,52 @@ export class LifecycleLedger {
 		this.#corruptFile = `${this.#file}.corrupt`;
 	}
 	async open(): Promise<this> {
-		await this.assertSupportedStateVersions();
 		await fs.mkdir(path.dirname(this.#file), { recursive: true, mode: 0o700 });
 		this.#entries = [];
 		const quarantinedTerminal = new Set<string>();
 		this.#byIdentity.clear();
 		this.#warnings = [];
 		const uncertainAfterCorruption = new Set<string>();
+		const source = await this.#readBoundedSource();
 		let tornTail = false;
-		try {
-			const source = await fs.readFile(this.#file, "utf8");
-			tornTail = source.length > 0 && !source.endsWith("\n");
-			const lines = source.split("\n");
-			for (const line of lines) {
-				if (!line) continue;
+		if (source) {
+			tornTail = source.length > 0 && source.at(-1) !== 0x0a;
+			let lineStart = 0;
+			let rows = 0;
+			for (let offset = 0; offset <= source.length; offset += 1) {
+				if (offset !== source.length && source[offset] !== 0x0a) continue;
+				const line = source.subarray(lineStart, offset);
+				lineStart = offset + 1;
+				if (line.length === 0) continue;
+				rows += 1;
+				if (rows > MAX_LIFECYCLE_LEDGER_ROWS)
+					await this.#rejectOversizedSource("Lifecycle ledger exceeds the maximum row count.");
+				if (line.length > MAX_LIFECYCLE_LEDGER_LINE_BYTES)
+					await this.#rejectOversizedSource("Lifecycle ledger row exceeds the maximum byte length.");
 				try {
-					const e = JSON.parse(line) as LifecycleLedgerEntry;
-					assertSupportedStateVersion(this.#file, e);
-					if (!e.identity || !e.requestHash || !e.state) throw new Error("invalid ledger entry");
-					if (!hasValidTerminalDigests(e)) {
+					const value = parseLifecycleJson(line);
+					if (!isLifecycleLedgerEntry(value)) throw new Error("invalid ledger entry");
+					const entry = value;
+					assertSupportedStateVersion(this.#file, entry);
+					if (!hasValidTerminalDigests(entry)) {
 						await this.#quarantine(line);
 						const {
 							response: _response,
 							responseDigest: _responseDigest,
 							durableEffects: _durableEffects,
 							...uncertain
-						} = e;
+						} = entry;
 						const quarantined = { ...uncertain, state: "terminal_uncertain" as const, ts: Date.now() };
 						this.#entries.push(quarantined);
 						this.#byIdentity.set(quarantined.identity, quarantined);
 						quarantinedTerminal.add(quarantined.identity);
 						continue;
 					}
-					this.#entries.push(e);
-					this.#byIdentity.set(e.identity, e);
-					uncertainAfterCorruption.delete(e.identity);
-				} catch {
+					this.#entries.push(entry);
+					this.#byIdentity.set(entry.identity, entry);
+					uncertainAfterCorruption.delete(entry.identity);
+				} catch (error) {
+					if (error instanceof Error && "code" in error && error.code === "unsupported_state_version") throw error;
 					for (const [identity, latest] of this.#byIdentity) {
 						if (!terminal(latest.state) && latest.state !== "terminal_uncertain")
 							uncertainAfterCorruption.add(identity);
@@ -164,8 +216,6 @@ export class LifecycleLedger {
 					await this.#quarantine(line);
 				}
 			}
-		} catch (e) {
-			if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
 		}
 		if (tornTail) await this.#sealTornTail();
 		for (const identity of quarantinedTerminal) {
@@ -192,6 +242,29 @@ export class LifecycleLedger {
 		}
 		return this;
 	}
+	async #readBoundedSource(): Promise<Buffer | undefined> {
+		let handle: fs.FileHandle | undefined;
+		try {
+			handle = await fs.open(this.#file, fsSync.constants.O_RDONLY | fsSync.constants.O_NOFOLLOW);
+			const stat = await handle.stat({ bigint: true });
+			if (!stat.isFile() || stat.size > BigInt(MAX_LIFECYCLE_LEDGER_BYTES))
+				await this.#rejectOversizedSource("Lifecycle ledger exceeds the maximum file byte length.");
+			const bytes = Buffer.alloc(Number(stat.size) + 1);
+			const { bytesRead } = await handle.read(bytes, 0, bytes.length, 0);
+			if (bytesRead > MAX_LIFECYCLE_LEDGER_BYTES)
+				await this.#rejectOversizedSource("Lifecycle ledger exceeds the maximum file byte length.");
+			return bytes.subarray(0, bytesRead);
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+			throw error;
+		} finally {
+			if (handle) await handle.close();
+		}
+	}
+	async #rejectOversizedSource(reason: string): Promise<never> {
+		await this.#quarantine(reason);
+		throw new Error(reason);
+	}
 	async #sealTornTail(): Promise<void> {
 		const h = await fs.open(this.#file, "a", 0o600);
 		try {
@@ -201,10 +274,11 @@ export class LifecycleLedger {
 			await h.close();
 		}
 	}
-	async #quarantine(line: string): Promise<void> {
+	async #quarantine(line: string | Uint8Array): Promise<void> {
 		const h = await fs.open(this.#corruptFile, "a", 0o600);
 		try {
-			await h.writeFile(`${line}\n`);
+			await h.writeFile(line);
+			await h.writeFile("\n");
 			await h.sync();
 		} finally {
 			await h.close();
@@ -269,18 +343,18 @@ export class LifecycleLedger {
 		}
 		return this.#append(next);
 	}
+
 	async assertSupportedStateVersions(): Promise<void> {
-		let source: string;
-		try {
-			source = await fs.readFile(this.#file, "utf8");
-		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
-			throw error;
-		}
-		for (const line of source.split("\n")) {
-			if (!line) continue;
+		const source = await this.#readBoundedSource();
+		if (!source) return;
+		let lineStart = 0;
+		for (let offset = 0; offset <= source.length; offset += 1) {
+			if (offset !== source.length && source[offset] !== 0x0a) continue;
+			const line = source.subarray(lineStart, offset);
+			lineStart = offset + 1;
+			if (line.length === 0 || line.length > MAX_LIFECYCLE_LEDGER_LINE_BYTES) continue;
 			try {
-				assertSupportedStateVersion(this.#file, JSON.parse(line));
+				assertSupportedStateVersion(this.#file, parseLifecycleJson(line));
 			} catch (error) {
 				if (error instanceof Error && "code" in error && error.code === "unsupported_state_version") throw error;
 			}
