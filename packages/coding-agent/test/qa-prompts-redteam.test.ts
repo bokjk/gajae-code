@@ -27,7 +27,7 @@ describe("QA red-team: untrusted prompt boundaries", () => {
 			},
 		];
 		const message = convertToLlm(messages)[0];
-		const text = message?.content.find(part => part.type === "text");
+		const text = Array.isArray(message?.content) ? message.content.find(part => part.type === "text") : undefined;
 		const converted = text?.type === "text" ? text.text : "";
 		expect(converted.match(/<\/system-reminder>/gi)).toHaveLength(1);
 	});

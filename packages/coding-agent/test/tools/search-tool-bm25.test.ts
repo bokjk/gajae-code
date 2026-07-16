@@ -35,7 +35,7 @@ function createSession(tools: DiscoverableTool[]): DiscoveryToolSession {
 }
 
 function tool(name: string, summary: string): DiscoverableTool {
-	return { name, label: name, summary, source: name.startsWith("mcp__") ? "mcp" : "builtin", schemaKeys: [] };
+	return { name, label: name, description: summary, summary, source: name.startsWith("mcp__") ? "mcp" : "builtin", schemaKeys: [] };
 }
 
 describe("SearchToolBm25Tool", () => {

@@ -8,6 +8,7 @@ describe("discoverable tool index", () => {
 				name: "mcp__github_create_issue",
 				label: "github/create_issue",
 				summary: "Create a GitHub issue",
+				description: "Create a GitHub issue",
 				source: "mcp" as const,
 				serverName: "github",
 				mcpToolName: "create_issue",
