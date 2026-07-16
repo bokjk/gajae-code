@@ -193,9 +193,11 @@ export function buildCacheBehaviorWarning(
 	usage: Usage | undefined,
 	model: { cost: CacheEconomicsModelCost } | undefined | null,
 ): CacheBehaviorWarning | undefined {
-	const summary = model
-		? computeCacheMissCostSummary(usage, { kind: "current-model-estimate", pricing: model.cost })
-		: undefined;
+	if (!model) return undefined;
+	const summary = computeCacheMissCostSummary(usage, {
+		kind: "current-model-estimate",
+		pricing: model.cost,
+	});
 	if (!summary) return undefined;
 	const tokenOnlyPricing = model.cost.input === 0 && model.cost.cacheRead === 0 && model.cost.cacheWrite === 0;
 	if (

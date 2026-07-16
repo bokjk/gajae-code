@@ -1,3 +1,4 @@
+import type { Usage } from "@gajae-code/ai";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -17,6 +18,14 @@ import {
 } from "@gajae-code/coding-agent/session/fallback-chain-controller";
 
 const THREE_HOURS_MS = 3 * 60 * 60 * 1_000;
+const zeroPriceUsage: Usage = {
+	input: 20_000,
+	output: 0,
+	cacheRead: 0,
+	cacheWrite: 0,
+	totalTokens: 20_000,
+	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+};
 
 describe("routing adversarial contract probes", () => {
 	let root: string;
@@ -116,10 +125,8 @@ describe("routing adversarial contract probes", () => {
 			),
 		).toBeUndefined();
 		expect(
-			buildCacheBehaviorWarning(
-				{ input: 20_000, output: 0, cacheRead: 0, cacheWrite: 0, cost: {} },
-				{ cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } },
-			)?.code,
+			buildCacheBehaviorWarning(zeroPriceUsage, { cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } })
+				?.code,
 		).toBe("provider_side_cache_miss");
 	});
 });
