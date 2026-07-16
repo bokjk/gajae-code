@@ -1097,6 +1097,77 @@ test("broker replays one identity-bound lifecycle metadata cleanup plan after th
 		await fs.rm(root, { recursive: true, force: true });
 	}
 }, 30_000);
+test("broker refuses fresh lifecycle cleanup when ready sibling has a different owner marker", async () => {
+	const root = await fs.mkdtemp(path.join(process.env.TMPDIR ?? "/tmp", "gjc-broker-mismatched-ready-cleanup-"));
+	const agentDir = path.join(root, "agent");
+	const stateRoot = path.join(root, ".gjc", "state");
+	const saved = SessionManager.create(root, SessionManager.getDefaultSessionDir(root, agentDir));
+	const broker = new Broker({ agentDir });
+	try {
+		await saved.ensureOnDisk();
+		const sessionId = saved.getSessionId();
+		const sessionPath = saved.getSessionFile();
+		if (!sessionPath) throw new Error("Expected persisted delete transcript.");
+		await saved.close();
+		await broker.start();
+		await expect(
+			broker.handleRequest(
+				"session.resume",
+				{ cwd: root, stateRoot, sessionId, sessionPath },
+				"mismatched-ready-resume",
+			),
+		).resolves.toMatchObject({ ok: true, result: { sessionId } });
+		await expect(
+			broker.handleRequest("session.close", { sessionId }, "mismatched-ready-close"),
+		).resolves.toMatchObject({
+			ok: true,
+			result: { sessionId },
+		});
+		await waitFor(
+			async () =>
+				(await fs.access(path.join(stateRoot, "sdk", `${sessionId}.json`)).then(
+					() => false,
+					() => true,
+				))
+					? true
+					: undefined,
+			"mismatched ready endpoint cleanup",
+		);
+		const markerPath = path.join(stateRoot, "sdk", `${sessionId}.lifecycle.json`);
+		const readyPath = path.join(stateRoot, "sdk", `${sessionId}.lifecycle.ready.json`);
+		const marker = JSON.parse(await fs.readFile(markerPath, "utf8")) as {
+			pid: number;
+			effectMarker: string;
+			incarnation: string;
+		};
+		await fs.writeFile(readyPath, JSON.stringify({ ...marker, effectMarker: "different-ready-owner" }));
+
+		await expect(
+			broker.handleRequest(
+				"session.delete",
+				{ cwd: root, stateRoot, sessionId, sessionPath },
+				"mismatched-ready-delete",
+			),
+		).resolves.toMatchObject({ ok: false, error: { code: "terminal_uncertain" } });
+		await expect(fs.stat(markerPath)).resolves.toBeDefined();
+		await expect(fs.stat(readyPath)).resolves.toBeDefined();
+		const rows = (await fs.readFile(path.join(agentDir, "sdk", "lifecycle-ledger.jsonl"), "utf8"))
+			.split("\n")
+			.filter(Boolean)
+			.map(line => JSON.parse(line) as Record<string, unknown>);
+		expect(
+			rows.some(
+				row =>
+					((row.response as { error?: { cleanup?: { phase?: unknown } } } | undefined)?.error?.cleanup?.phase ??
+						null) === "lifecycle",
+			),
+		).toBe(false);
+	} finally {
+		await broker.stop();
+		await fs.rm(root, { recursive: true, force: true });
+	}
+}, 30_000);
+
 test("broker replays a base metadata cleanup receipt after reopen without stranding its lifecycle siblings", async () => {
 	const root = await fs.mkdtemp(path.join(process.env.TMPDIR ?? "/tmp", "gjc-broker-legacy-metadata-replay-"));
 	const agentDir = path.join(root, "agent");
@@ -1141,32 +1212,60 @@ test("broker replays a base metadata cleanup receipt after reopen without strand
 						},
 						metadataAttempt: 1,
 						plannedMetadataPath: plannedPath,
+						metadataCompleted: true,
 					},
 				},
 			},
 		});
+		await fs.unlink(markerPath);
 
 		broker = new Broker({ agentDir });
 		await broker.start();
-		await expect(broker.handleRequest("session.delete", request, key)).resolves.toEqual({
-			ok: true,
-			result: { sessionId },
+		setLifecycleCleanupHookForTest(broker, () => {
+			throw new Error("simulated crash after legacy ready cleanup");
 		});
+		await expect(broker.handleRequest("session.delete", request, key)).rejects.toThrow(
+			"simulated crash after legacy ready cleanup",
+		);
 		await expect(fs.stat(markerPath)).rejects.toThrow();
 		await expect(fs.stat(readyPath)).rejects.toThrow();
 		const rows = (await fs.readFile(path.join(agentDir, "sdk", "lifecycle-ledger.jsonl"), "utf8"))
 			.split("\n")
 			.filter(Boolean)
 			.map(line => JSON.parse(line) as Record<string, unknown>);
+		const preUnlinkPlan = rows.some(row => {
+			const cleanup = (
+				row.response as
+					| {
+							error?: {
+								cleanup?: { phase?: unknown; lifecycleFiles?: Array<{ path?: unknown; completed?: unknown }> };
+							};
+					  }
+					| undefined
+			)?.error?.cleanup;
+			return (
+				cleanup?.phase === "lifecycle" &&
+				cleanup.lifecycleFiles?.some(file => file.path === readyPath && file.completed === undefined) === true
+			);
+		});
+		expect(preUnlinkPlan).toBe(true);
 		const migrated = rows.findLast(row => row.state === "effect_started" && row.response);
 		expect((migrated?.response as { error?: { cleanup?: unknown } } | undefined)?.error?.cleanup).toMatchObject({
 			phase: "lifecycle",
 			sessionId,
 			lifecycleFiles: [
-				expect.objectContaining({ path: markerPath, plannedPath }),
-				expect.objectContaining({ path: readyPath, identity: expect.any(Object) }),
+				expect.objectContaining({ path: markerPath, plannedPath, completed: true }),
+				expect.objectContaining({ path: readyPath, identity: expect.any(Object), completed: true }),
 			],
 		});
+		await broker.stop();
+		broker = new Broker({ agentDir });
+		await broker.start();
+		await expect(broker.handleRequest("session.delete", request, key)).resolves.toEqual({
+			ok: true,
+			result: { sessionId },
+		});
+		await expect(fs.stat(readyPath)).rejects.toThrow();
 		await broker.stop();
 		broker = undefined;
 

@@ -1091,26 +1091,33 @@ function legacyMetadataCleanupPlan(cleanup: CleanupEvidence): CleanupEvidence | 
 		if (activeMarker) return undefined;
 		activeMarker = current.capture;
 	}
-	if (!activeMarker) return undefined;
-	let marker: unknown;
-	try {
-		marker = JSON.parse(activeMarker.bytes.toString("utf8"));
-	} catch {
-		return undefined;
-	}
-	if (!isEffectMarker(marker)) return undefined;
-
-	const ready = captureExactRegular(readyPath);
-	if (!ready) return undefined;
-	if (ready.kind === "present") {
-		let readyMarker: unknown;
+	if (!activeMarker && cleanup.metadataCompleted !== true) return undefined;
+	// A completed legacy marker can be absent; its exact ready sibling is then the remaining owner proof.
+	let marker: EffectMarker | undefined;
+	if (activeMarker) {
 		try {
-			readyMarker = JSON.parse(ready.capture.bytes.toString("utf8"));
+			const value: unknown = JSON.parse(activeMarker.bytes.toString("utf8"));
+			if (!isEffectMarker(value)) return undefined;
+			marker = value;
 		} catch {
 			return undefined;
 		}
-		if (!isEffectMarker(readyMarker) || !sameEffectMarker(marker, readyMarker)) return undefined;
 	}
+
+	const ready = captureExactRegular(readyPath);
+	if (!ready) return undefined;
+	let readyMarker: EffectMarker | undefined;
+	if (ready.kind === "present") {
+		try {
+			const value: unknown = JSON.parse(ready.capture.bytes.toString("utf8"));
+			if (!isEffectMarker(value)) return undefined;
+			readyMarker = value;
+		} catch {
+			return undefined;
+		}
+		if (marker && !sameEffectMarker(marker, readyMarker)) return undefined;
+	}
+	if (!marker && !readyMarker && cleanup.metadataCompleted !== true) return undefined;
 
 	return {
 		phase: "lifecycle",
@@ -1120,13 +1127,13 @@ function legacyMetadataCleanupPlan(cleanup: CleanupEvidence): CleanupEvidence | 
 			{
 				path: metadataPath,
 				identity: serializeCleanupIdentity({
-					...activeMarker.identity,
-					size: Number(activeMarker.identity.size),
+					...(activeMarker?.identity ?? persistedIdentity),
+					size: Number((activeMarker?.identity ?? persistedIdentity).size),
 				}),
 				attempt: cleanup.metadataAttempt ?? 1,
 				plannedPath,
 				...(detachedPath ? { detachedPath } : {}),
-				...(cleanup.metadataCompleted === true ? { completed: true as const } : {}),
+				...(!activeMarker && cleanup.metadataCompleted === true ? { completed: true as const } : {}),
 			},
 			...(ready.kind === "present"
 				? [
@@ -2743,6 +2750,7 @@ async function executeLifecycleResponse(
 		const lifecycleMetadata: Array<{
 			metadataPath: string;
 			metadata: LifecycleFileCapture;
+			marker: EffectMarker;
 		}> = [];
 		for (const metadataPath of metadataPaths) {
 			if (fsSync.existsSync(metadataPath)) {
@@ -2765,8 +2773,13 @@ async function executeLifecycleResponse(
 			}
 			if (!isEffectMarker(marker) || (record && marker.pid !== record.pid) || !hasObservedProcessExit(marker.pid))
 				return fail("terminal_uncertain", "Lifecycle metadata ownership could not be verified.");
-			lifecycleMetadata.push({ metadataPath, metadata });
+			lifecycleMetadata.push({ metadataPath, metadata, marker });
 		}
+		if (
+			lifecycleMetadata.length === metadataPaths.length &&
+			!sameEffectMarker(lifecycleMetadata[0].marker, lifecycleMetadata[1].marker)
+		)
+			return fail("terminal_uncertain", "Lifecycle metadata siblings do not share one owner marker.");
 		const metadataCleanup = lifecycleDeleteMetadataCleanupPlan(validated.metadataRoot, id, lifecycleMetadata);
 		if (metadataCleanup.lifecycleFiles?.length) {
 			await broker.ledger.transition(identity, "effect_started", {
