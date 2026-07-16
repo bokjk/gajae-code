@@ -13,6 +13,7 @@ import {
 	parseProviderCompatibility,
 	redactSecret,
 } from "../src/setup/provider-onboarding";
+import { AuthStorage } from "../src/session/auth-storage";
 
 let tempRoot: string | undefined;
 
@@ -207,6 +208,26 @@ describe("provider onboarding setup core", () => {
 		expect(parsed.providers.existing?.api).toBe("openai-responses");
 		expect(parsed.providers["claude-proxy"]?.api).toBe("anthropic-messages");
 		expect(parsed.providers["claude-proxy"]?.models.map(model => model.id)).toEqual(["claude-custom"]);
+	});
+
+	it("stores literal keys in AuthStorage instead of models.yml", async () => {
+		const modelsPath = await tempModelsPath();
+		await addApiCompatibleProvider({
+			compatibility: "openai",
+			providerId: "literal-key-provider",
+			baseUrl: "https://api.example.com/v1",
+			apiKey: "literal-secret",
+			models: ["example-model"],
+			modelsPath,
+		});
+		const text = await Bun.file(modelsPath).text();
+		expect(text).not.toContain("literal-secret");
+		const auth = await AuthStorage.create(path.join(path.dirname(modelsPath), "agent.db"));
+		try {
+			expect(await auth.getApiKey("literal-key-provider")).toBe("literal-secret");
+		} finally {
+			auth.close();
+		}
 	});
 
 	it("rejects remote plaintext HTTP and existing providers unless forced", async () => {
