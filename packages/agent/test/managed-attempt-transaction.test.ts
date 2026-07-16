@@ -1,7 +1,10 @@
 import { describe, expect, it } from "bun:test";
 import type { ManagedAttemptOutcome } from "@gajae-code/agent-core";
 import { Agent } from "@gajae-code/agent-core";
-import type { AssistantMessage } from "@gajae-code/ai";
+import { agentLoopContinue, sanitizedDetachedClone } from "@gajae-code/agent-core/agent-loop";
+import type { AgentContext, AgentEvent, AgentLoopConfig } from "@gajae-code/agent-core/types";
+import type { AssistantMessage, Message } from "@gajae-code/ai";
+
 import { createMockModel } from "@gajae-code/ai/providers/mock";
 import { AssistantMessageEventStream } from "@gajae-code/ai/utils/event-stream";
 
@@ -53,6 +56,80 @@ describe("managed attempt transaction", () => {
 		expect(assistantBatch.slice(-3)).toEqual(["message_end", "turn_end", "agent_end"]);
 		expect(agent.state.messages.filter(message => message.role === "assistant")).toHaveLength(1);
 		expectManagedRunStart(events);
+	});
+
+	it("commits a detached accepted message when a managed partial is not structured-cloneable", async () => {
+		const mock = createMockModel();
+		let liveMessage: AssistantMessage | undefined;
+		const streamFn = () => {
+			const stream = new AssistantMessageEventStream();
+			void (async () => {
+				const partial = assistantMessage(mock.model);
+				liveMessage = partial;
+				(partial as unknown as Record<string, unknown>).probe = () => {};
+				stream.push({ type: "start", partial });
+				await Bun.sleep(0);
+				partial.content.push({ type: "text", text: "accepted" });
+				stream.push({ type: "text_start", contentIndex: 0, partial });
+				await Bun.sleep(0);
+				stream.push({ type: "done", reason: "stop", message: partial });
+			})();
+			return stream;
+		};
+		const context: AgentContext = {
+			systemPrompt: ["test"],
+			messages: [{ role: "user", content: "run", timestamp: Date.now() }],
+			tools: [],
+		};
+		const config: AgentLoopConfig = {
+			model: mock.model,
+			convertToLlm: messages =>
+				messages.filter(
+					message => message.role === "user" || message.role === "assistant" || message.role === "toolResult",
+				) as Message[],
+			fallbackManaged: true,
+		};
+		const stream = agentLoopContinue(context, config, undefined, streamFn);
+		const events: AgentEvent[] = [];
+		for await (const event of stream) events.push(event);
+		const result = await stream.result();
+		const messageUpdate = events.find(
+			(event): event is Extract<AgentEvent, { type: "message_update" }> => event.type === "message_update",
+		);
+		const messageEnd = events.find(
+			(event): event is Extract<AgentEvent, { type: "message_end" }> =>
+				event.type === "message_end" && event.message.role === "assistant",
+		);
+		const turnEnd = events.find(
+			(event): event is Extract<AgentEvent, { type: "turn_end" }> => event.type === "turn_end",
+		);
+		const agentEnd = events.find(
+			(event): event is Extract<AgentEvent, { type: "agent_end" }> => event.type === "agent_end",
+		);
+		const committed = context.messages.at(-1) as AssistantMessage;
+
+		expect(messageUpdate).toBeDefined();
+		expect(messageEnd).toBeDefined();
+		expect(turnEnd).toBeDefined();
+		expect(agentEnd).toBeDefined();
+		expect(result).toHaveLength(1);
+		const accepted = turnEnd!.message;
+		expect(accepted).toBe(committed);
+		expect(agentEnd!.messages[0]).toBe(accepted);
+		expect(result[0]).toBe(accepted);
+		expect(messageUpdate!.message).toEqual(accepted);
+		expect(messageEnd!.message).toEqual(accepted);
+		for (const message of [messageUpdate!.message, messageEnd!.message, accepted, agentEnd!.messages[0], result[0]]) {
+			expect(() => structuredClone(message)).not.toThrow();
+			expect(() => JSON.stringify(message)).not.toThrow();
+			expect(message).toMatchObject({ role: "assistant", content: [{ type: "text", text: "accepted" }] });
+		}
+
+		(liveMessage!.content[0] as { type: "text"; text: string }).text = "mutated after commit";
+		(liveMessage as unknown as Record<string, unknown>).probe = () => "mutated";
+		for (const message of [messageUpdate!.message, messageEnd!.message, accepted, agentEnd!.messages[0], result[0]]) {
+			expect((message as AssistantMessage).content[0]).toEqual({ type: "text", text: "accepted" });
+		}
 	});
 
 	it("replays mutating provider partials as event-time snapshots with callbacks first", async () => {
@@ -158,7 +235,9 @@ describe("managed attempt transaction", () => {
 	it("discards retryable managed failures before any assistant lifecycle escapes", async () => {
 		const mock = createMockModel();
 		const streamFn = async () => {
-			throw Object.assign(new Error("rate limit exceeded"), { status: 429 });
+			throw Object.assign(new Error("rate limit exceeded"), {
+				transportFailure: { kind: "transport", status: 429 },
+			});
 		};
 		const agent = new Agent({
 			initialState: { model: mock.model, systemPrompt: ["test"], tools: [], messages: [] },
@@ -195,7 +274,457 @@ describe("managed attempt transaction", () => {
 		expect(agent.state.messages.filter(message => message.role === "assistant")).toHaveLength(0);
 	});
 
-	it("discards an over-limit provisional batch and reports a retryable private outcome", async () => {
+	it("does not authorize managed fallback from raw status or hostile transport wrappers", async () => {
+		const mock = createMockModel();
+		const localFailure = Object.assign(new Error("local status only"), { status: 429 });
+		Object.defineProperty(localFailure, "transportFailure", {
+			get() {
+				throw new Error("hostile transport getter");
+			},
+		});
+		const agent = new Agent({
+			initialState: { model: mock.model, systemPrompt: ["test"], tools: [], messages: [] },
+			streamFn: async () => {
+				throw localFailure;
+			},
+		});
+		let outcomeCalls = 0;
+
+		await agent.prompt("run", {
+			fallbackManaged: true,
+			onManagedAttemptOutcome: () => {
+				outcomeCalls += 1;
+				return { type: "retry", continuation: () => {} };
+			},
+		} as any);
+		await agent.waitForIdle();
+
+		expect(outcomeCalls).toBe(0);
+		expect(agent.state.error).toContain("local status only");
+		expect(agent.state.messages.find(message => message.role === "assistant")).toBeDefined();
+	});
+
+	it("stages a non-cloneable provider failure without masking it as a DataCloneError", async () => {
+		// Regression: a provider error message whose payload is not
+		// structured-cloneable (e.g. a live `Headers` in `transportFailure`)
+		// must not turn into a local "The object can not be cloned." attempt
+		// failure that hides the real provider outcome and burns the chain.
+		const mock = createMockModel();
+		const streamFn = () => {
+			const stream = new AssistantMessageEventStream();
+			queueMicrotask(() => {
+				const failure: AssistantMessage = {
+					...assistantMessage(mock.model),
+					stopReason: "error",
+					errorMessage: "rate limited",
+					errorStatus: 429,
+					transportFailure: {
+						kind: "transport",
+						status: 429,
+						headers: new Headers({ "retry-after": "0" }) as unknown as Record<string, string>,
+					},
+				};
+				stream.push({ type: "error", reason: "error", error: failure });
+			});
+			return stream;
+		};
+		const agent = new Agent({
+			initialState: { model: mock.model, systemPrompt: ["test"], tools: [], messages: [] },
+			streamFn,
+		});
+		const outcomes: string[] = [];
+		const facts: unknown[] = [];
+
+		await agent.prompt("run", {
+			fallbackManaged: true,
+			onManagedAttemptOutcome: (outcome: ManagedAttemptOutcome) => {
+				outcomes.push(
+					outcome.type === "retryable_discarded" ? (outcome.failure.message.errorMessage ?? "") : outcome.reason,
+				);
+				if (outcome.type === "retryable_discarded") facts.push(outcome.failure.transportFailure);
+				return { type: "terminal", terminal: { stopReason: "exhausted" } };
+			},
+		} as any);
+
+		expect(outcomes).toEqual(["rate limited"]);
+		// The outcome facts must be the normalized plain-record form (retry
+		// delay survives; no live Headers escapes to the fallback controller).
+		expect(facts).toHaveLength(1);
+		expect(facts[0]).toMatchObject({ kind: "transport", status: 429 });
+		expect((facts[0] as { headers?: unknown }).headers).toEqual({ "retry-after": "0" });
+		expect(() => structuredClone(facts[0])).not.toThrow();
+		expect(agent.state.messages.filter(message => message.role === "assistant")).toHaveLength(0);
+	});
+
+	it("keeps degraded snapshots event-time distinct when the partial is not structured-cloneable", async () => {
+		// The provider mutates one partial in place while it also carries a
+		// non-structured-cloneable leaf (a function). The sanitizing snapshot
+		// fallback must still detach every staged value: replaying a live
+		// reference would surface "ab" three times instead of "", "a", "ab".
+		const mock = createMockModel();
+		const streamFn = () => {
+			const stream = new AssistantMessageEventStream();
+			void (async () => {
+				const partial = assistantMessage(mock.model);
+				(partial as unknown as Record<string, unknown>).probe = () => {};
+				stream.push({ type: "start", partial });
+				await Bun.sleep(0);
+				partial.content.push({ type: "text", text: "" });
+				stream.push({ type: "text_start", contentIndex: 0, partial });
+				await Bun.sleep(0);
+				(partial.content[0] as { type: "text"; text: string }).text = "a";
+				stream.push({ type: "text_delta", contentIndex: 0, delta: "a", partial });
+				await Bun.sleep(0);
+				(partial.content[0] as { type: "text"; text: string }).text = "ab";
+				stream.push({ type: "text_delta", contentIndex: 0, delta: "b", partial });
+				await Bun.sleep(0);
+				stream.push({ type: "done", reason: "stop", message: partial });
+			})();
+			return stream;
+		};
+		const eventContents: string[] = [];
+		const callbackContents: string[] = [];
+		const agent = new Agent({
+			initialState: { model: mock.model, systemPrompt: ["test"], tools: [], messages: [] },
+			streamFn,
+			onAssistantMessageEvent: message => {
+				callbackContents.push((message.content[0] as { type: "text"; text: string } | undefined)?.text ?? "");
+			},
+		});
+		agent.subscribe(event => {
+			if (event.type !== "message_update") return;
+			eventContents.push(
+				((event.message as AssistantMessage).content[0] as { type: "text"; text: string } | undefined)?.text ?? "",
+			);
+		});
+
+		await agent.prompt("run", { fallbackManaged: true });
+
+		expect(eventContents).toEqual(["", "a", "ab"]);
+		expect(callbackContents).toEqual(["", "a", "ab"]);
+	});
+
+	it("stages a cyclic payload without converting it into an over-limit attempt failure", async () => {
+		// structuredClone handles cycles, but JSON.stringify does not: the byte
+		// accounting gate must fall back to a cycle-safe sanitized snapshot
+		// instead of mislabeling the event as a retryable 503 buffer overflow.
+		const mock = createMockModel();
+		const streamFn = () => {
+			const stream = new AssistantMessageEventStream();
+			void (async () => {
+				const partial = assistantMessage(mock.model);
+				const cyclic: Record<string, unknown> = { note: "cyclic" };
+				cyclic.self = cyclic;
+				(partial as unknown as Record<string, unknown>).probe = cyclic;
+				stream.push({ type: "start", partial });
+				await Bun.sleep(0);
+				partial.content.push({ type: "text", text: "accepted" });
+				stream.push({ type: "text_start", contentIndex: 0, partial });
+				await Bun.sleep(0);
+				stream.push({ type: "done", reason: "stop", message: partial });
+			})();
+			return stream;
+		};
+		const agent = new Agent({
+			initialState: { model: mock.model, systemPrompt: ["test"], tools: [], messages: [] },
+			streamFn,
+		});
+		const events: string[] = [];
+		agent.subscribe(event => events.push(event.type));
+
+		await agent.prompt("run", { fallbackManaged: true });
+
+		expect(events).toContain("message_end");
+		expect(events.at(-1)).toBe("agent_end");
+		expect(agent.state.error).toBeUndefined();
+		expect(agent.state.messages.filter(message => message.role === "assistant")).toHaveLength(1);
+	});
+
+	it("defeats a payload-controlled array map override that returns the live array", async () => {
+		// Adversarial regression: if the sanitizer dispatched through
+		// `input.map`, this override would hand back the provider's live
+		// array and later mutations would rewrite already-staged snapshots.
+		const mock = createMockModel();
+		const streamFn = () => {
+			const stream = new AssistantMessageEventStream();
+			void (async () => {
+				const partial = assistantMessage(mock.model);
+				(partial as unknown as Record<string, unknown>).probe = () => {};
+				const content = partial.content as unknown[];
+				Object.defineProperty(content, "map", { value: () => content });
+				stream.push({ type: "start", partial });
+				await Bun.sleep(0);
+				content.push({ type: "text", text: "" });
+				stream.push({ type: "text_start", contentIndex: 0, partial });
+				await Bun.sleep(0);
+				(content[0] as { type: "text"; text: string }).text = "a";
+				stream.push({ type: "text_delta", contentIndex: 0, delta: "a", partial });
+				await Bun.sleep(0);
+				(content[0] as { type: "text"; text: string }).text = "ab";
+				stream.push({ type: "text_delta", contentIndex: 0, delta: "b", partial });
+				await Bun.sleep(0);
+				stream.push({ type: "done", reason: "stop", message: partial });
+			})();
+			return stream;
+		};
+		const eventContents: string[] = [];
+		const agent = new Agent({
+			initialState: { model: mock.model, systemPrompt: ["test"], tools: [], messages: [] },
+			streamFn,
+		});
+		agent.subscribe(event => {
+			if (event.type !== "message_update") return;
+			eventContents.push(
+				((event.message as AssistantMessage).content[0] as { type: "text"; text: string } | undefined)?.text ?? "",
+			);
+		});
+
+		await agent.prompt("run", { fallbackManaged: true });
+
+		expect(eventContents).toEqual(["", "a", "ab"]);
+	});
+
+	it("stages a cyclic array with a map override without throwing or masking the run", async () => {
+		// Second adversarial mode: the override returns the same cyclic array,
+		// so a map-dispatching sanitizer would re-produce the cycle and the
+		// byte-accounting JSON.stringify would throw outside any catch.
+		const mock = createMockModel();
+		const streamFn = () => {
+			const stream = new AssistantMessageEventStream();
+			void (async () => {
+				const partial = assistantMessage(mock.model);
+				(partial as unknown as Record<string, unknown>).probe = () => {};
+				const content = partial.content as unknown[];
+				content.push({ type: "text", text: "accepted" });
+				content.push(content);
+				Object.defineProperty(content, "map", { value: () => content });
+				stream.push({ type: "start", partial });
+				await Bun.sleep(0);
+				stream.push({ type: "text_start", contentIndex: 0, partial });
+				await Bun.sleep(0);
+				stream.push({ type: "done", reason: "stop", message: partial });
+			})();
+			return stream;
+		};
+		const agent = new Agent({
+			initialState: { model: mock.model, systemPrompt: ["test"], tools: [], messages: [] },
+			streamFn,
+		});
+		const events: string[] = [];
+		agent.subscribe(event => events.push(event.type));
+
+		await agent.prompt("run", { fallbackManaged: true });
+
+		expect(events).toContain("message_end");
+		expect(events.at(-1)).toBe("agent_end");
+		expect(agent.state.error).toBeUndefined();
+	});
+
+	it("replaces throwing accessors with a placeholder instead of invoking or failing", async () => {
+		// The degraded snapshot must never invoke accessors (observable side
+		// effects) nor let a throwing getter fail the attempt: the property is
+		// replaced with "[accessor]" via descriptor inspection.
+		const mock = createMockModel();
+		const streamFn = () => {
+			const stream = new AssistantMessageEventStream();
+			void (async () => {
+				const partial = assistantMessage(mock.model);
+				const poisoned: Record<string, unknown> = {};
+				Object.defineProperty(poisoned, "secret", {
+					enumerable: true,
+					get() {
+						throw new Error("boom");
+					},
+				});
+				(partial as unknown as Record<string, unknown>).probe = poisoned;
+				stream.push({ type: "start", partial });
+				await Bun.sleep(0);
+				partial.content.push({ type: "text", text: "accepted" });
+				stream.push({ type: "text_start", contentIndex: 0, partial });
+				await Bun.sleep(0);
+				stream.push({ type: "done", reason: "stop", message: partial });
+			})();
+			return stream;
+		};
+		const replayedProbes: unknown[] = [];
+		const agent = new Agent({
+			initialState: { model: mock.model, systemPrompt: ["test"], tools: [], messages: [] },
+			streamFn,
+		});
+		agent.subscribe(event => {
+			if (event.type !== "message_update") return;
+			replayedProbes.push(
+				((event.message as unknown as Record<string, unknown>).probe as Record<string, unknown>).secret,
+			);
+		});
+
+		await agent.prompt("run", { fallbackManaged: true });
+
+		expect(replayedProbes.length).toBeGreaterThan(0);
+		expect(replayedProbes.every(probe => probe === "[accessor]")).toBeTrue();
+		expect(agent.state.error).toBeUndefined();
+	});
+
+	it("bounds sparse and length-poisoned arrays without densifying holes", () => {
+		// A sparse array (or a huge `length` with one element) must not force
+		// an allocation proportional to its declared length: the degraded
+		// clone enumerates only present entries and degrades sparse arrays to
+		// a record of their indices. A densifying implementation would blow
+		// past this test's timeout allocating millions of slots.
+		// (Direct unit test: at the transaction level a measurable sparse
+		// event is rejected by the byte cap from its JSON size alone — the
+		// same pre-clone measurement upstream always used — so the sanitizer's
+		// shape guarantees are asserted on the exported function.)
+		const sparse: unknown[] = [];
+		sparse[9_999_999] = { note: "sparse-x" };
+		const lengthPoisoned: unknown[] = [];
+		lengthPoisoned.length = 10_000_000;
+		lengthPoisoned[0] = () => {};
+
+		const out = sanitizedDetachedClone({ sparse, lengthPoisoned }) as Record<string, unknown>;
+
+		// Sparse array degrades to a record of present indices only.
+		expect(out.sparse).toEqual({ "9999999": { note: "sparse-x" } } as never);
+		// Length-poisoned array keeps only its single present element.
+		expect(out.lengthPoisoned).toEqual(["[unserializable]"] as never);
+		// The degraded form is JSON-safe and small — no hole densification.
+		expect(JSON.stringify(out).length).toBeLessThan(200);
+	});
+
+	it("charges the budget for every enumerated key, including accessors and shared-object revisits", () => {
+		// Round-4 counterexample: N references to one wide accessor-bearing
+		// child. Without per-key debits, each revisit would emit its accessor
+		// placeholders "for free" (accessors never enter walk()), allowing
+		// ~N*M descriptor reads while consuming only ~N budget units.
+		const child: Record<string, unknown> = {};
+		for (let accessorIndex = 0; accessorIndex < 50; accessorIndex++) {
+			Object.defineProperty(child, `accessor${accessorIndex}`, {
+				enumerable: true,
+				get() {
+					throw new Error("must not be invoked");
+				},
+			});
+		}
+		const root: Record<string, unknown> = {};
+		for (let refIndex = 0; refIndex < 50; refIndex++) root[`ref${refIndex}`] = child;
+
+		const budget = 120;
+		const out = sanitizedDetachedClone(root, budget) as Record<string, unknown>;
+
+		// Output is detached, JSON-safe, and bounded by the budget.
+		const serialized = JSON.stringify(out);
+		expect(serialized.length).toBeGreaterThan(0);
+		const accessorCount = serialized.split('"[accessor]"').length - 1;
+		const truncatedCount = serialized.split('"[truncated]"').length - 1;
+		expect(accessorCount).toBeLessThanOrEqual(budget);
+		expect(accessorCount).toBeGreaterThan(0);
+		expect(truncatedCount).toBeGreaterThan(0);
+	});
+
+	it("collapses proxies before any reflective enumeration", () => {
+		let trapDispatches = 0;
+		const hostileArrayProxy = new Proxy([] as unknown[], {
+			ownKeys() {
+				trapDispatches += 1;
+				return ["2", "1", "length"];
+			},
+			getOwnPropertyDescriptor() {
+				trapDispatches += 1;
+				return { value: "x", enumerable: true, configurable: true };
+			},
+			get() {
+				trapDispatches += 1;
+				return 0;
+			},
+		});
+		const { proxy: revoked, revoke } = Proxy.revocable({}, {});
+		revoke();
+
+		const out = sanitizedDetachedClone({ hostileArrayProxy, revoked, plain: { ok: true } }) as Record<
+			string,
+			unknown
+		>;
+
+		expect(out.hostileArrayProxy).toBe("[unserializable]");
+		expect(out.revoked).toBe("[unserializable]");
+		expect(out.plain).toEqual({ ok: true } as never);
+		// No ownKeys/descriptor/get trap was ever dispatched.
+		expect(trapDispatches).toBe(0);
+	});
+
+	it("never walks the prototype chain: a proxy prototype dispatches zero traps", () => {
+		// `instanceof Date` would invoke a proxy prototype's getPrototypeOf
+		// trap while walking the chain; the brand check must use the internal
+		// slot (`util.types.isDate`) instead.
+		let getPrototypeDispatches = 0;
+		const hostilePrototype: object = new Proxy(
+			{},
+			{
+				getPrototypeOf() {
+					getPrototypeDispatches += 1;
+					return null;
+				},
+			},
+		);
+		const ordinary = Object.create(hostilePrototype) as Record<string, unknown>;
+		ordinary.ok = true;
+
+		const out = sanitizedDetachedClone({ ordinary, when: new Date(1234567890) }) as Record<string, unknown>;
+
+		expect(out.ordinary).toEqual({ ok: true } as never);
+		expect(out.when).toEqual(new Date(1234567890));
+		expect(getPrototypeDispatches).toBe(0);
+	});
+
+	it("rejects an oversized event before duplicating it with a snapshot", async () => {
+		// The staged-byte cap exists to bound memory: an over-limit event must
+		// be rejected from its measurement pass alone, WITHOUT first being
+		// duplicated by structuredClone. The nested witness getter counts deep
+		// reads: measurement reads it exactly once; a snapshot taken before
+		// the cap check would read it a second time.
+		const mock = createMockModel();
+		let witnessReads = 0;
+		const streamFn = () => {
+			const stream = new AssistantMessageEventStream();
+			queueMicrotask(() => {
+				const partial = assistantMessage(mock.model);
+				partial.content.push({ type: "text", text: "x".repeat(16 * 1024 * 1024 + 1) });
+				const witness: Record<string, unknown> = {};
+				Object.defineProperty(witness, "read", {
+					enumerable: true,
+					get() {
+						witnessReads += 1;
+						return true;
+					},
+				});
+				(partial as unknown as Record<string, unknown>).witness = witness;
+				stream.push({ type: "start", partial });
+			});
+			return stream;
+		};
+		const agent = new Agent({
+			initialState: { model: mock.model, systemPrompt: ["test"], tools: [], messages: [] },
+			streamFn,
+		});
+		let outcomeCalls = 0;
+
+		await agent.prompt("run", {
+			fallbackManaged: true,
+			onManagedAttemptOutcome: () => {
+				outcomeCalls += 1;
+				return { type: "terminal", terminal: { stopReason: "exhausted" } };
+			},
+		} as any);
+		await agent.waitForIdle();
+
+		// Local overflow is not provider evidence: the fallback chain must not
+		// be consumed, and the failure surfaces as an explicit local error.
+		expect(outcomeCalls).toBe(0);
+		expect(agent.state.error).toContain("provisional event buffer limit");
+		expect(witnessReads).toBe(1);
+	});
+
+	it("fails an over-limit provisional batch as a local error without consuming the chain", async () => {
 		const mock = createMockModel();
 		const streamFn = () => {
 			const stream = new AssistantMessageEventStream();
@@ -226,7 +755,8 @@ describe("managed attempt transaction", () => {
 			streamFn,
 		});
 		const events: string[] = [];
-		const outcomes: AssistantMessage[] = [];
+		let outcomeCalls = 0;
+		const surfaced: AssistantMessage[] = [];
 		agent.subscribe(event => {
 			if (
 				event.type === "agent_end" ||
@@ -235,25 +765,32 @@ describe("managed attempt transaction", () => {
 			) {
 				events.push(event.type);
 			}
+			if (event.type === "message_end" && event.message.role === "assistant") {
+				surfaced.push(event.message as AssistantMessage);
+			}
 		});
 
 		await agent.prompt("run", {
 			fallbackManaged: true,
-			onManagedAttemptOutcome: (outcome: ManagedAttemptOutcome) => {
-				if (outcome.type === "retryable_discarded") outcomes.push(outcome.failure.message);
+			onManagedAttemptOutcome: () => {
+				outcomeCalls += 1;
 				return { type: "retry", continuation: () => {} };
 			},
 		} as any);
+		await agent.waitForIdle();
 
-		expect(outcomes).toHaveLength(1);
-		expect(outcomes[0]).toMatchObject({ stopReason: "error", errorStatus: 503 });
-		expect(outcomes[0]?.errorMessage).toContain("provisional event buffer limit");
-		expect(events).not.toContain("message_start");
+		// Only original typed provider transport facts may authorize provider
+		// fallback: the local buffer-limit error must not synthesize a
+		// provider-like 503 and must not rotate/consume the chain. It surfaces
+		// as an explicit local error message carrying no provider evidence,
+		// and no provisional streamed content leaks (no message_update).
+		expect(outcomeCalls).toBe(0);
+		expect(agent.state.error).toContain("provisional event buffer limit");
 		expect(events).not.toContain("message_update");
-		expect(events).not.toContain("message_end");
-		expect(events).not.toContain("turn_end");
-		expect(events).not.toContain("agent_end");
-		expect(agent.state.messages.filter(message => message.role === "assistant")).toHaveLength(0);
+		expect(surfaced).toHaveLength(1);
+		expect(surfaced[0]?.errorMessage).toContain("provisional event buffer limit");
+		expect(surfaced[0]?.errorStatus).toBeUndefined();
+		expect(surfaced[0]?.transportFailure).toBeUndefined();
 	});
 
 	it("retains queued follow-up input when its managed attempt is discarded for retry", async () => {
@@ -264,7 +801,10 @@ describe("managed attempt transaction", () => {
 			initialState: { model: mock.model, systemPrompt: ["test"], tools: [], messages: [] },
 			streamFn: (...args) => {
 				calls += 1;
-				if (calls === 2) throw Object.assign(new Error("limited"), { status: 429 });
+				if (calls === 2)
+					throw Object.assign(new Error("limited"), {
+						transportFailure: { kind: "transport", status: 429 },
+					});
 				return mock.stream(...args);
 			},
 		});
@@ -573,7 +1113,9 @@ it("emits an exhaustion diagnostic lifecycle once before terminal completion", a
 	const agent = new Agent({
 		initialState: { model: mock.model, systemPrompt: ["test"], tools: [], messages: [] },
 		streamFn: async () => {
-			throw Object.assign(new Error("overloaded"), { status: 503 });
+			throw Object.assign(new Error("overloaded"), {
+				transportFailure: { kind: "transport", status: 503 },
+			});
 		},
 	});
 	const events: string[] = [];
