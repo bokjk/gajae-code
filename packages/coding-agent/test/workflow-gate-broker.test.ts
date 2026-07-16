@@ -409,6 +409,44 @@ describe("WorkflowGateBroker", () => {
 				),
 		).toThrow(/directory fsync failed/);
 	});
+	it("ignores Windows EPERM only for the parent directory fsync", () => {
+		const dir = mkdtempSync(path.join(tmpdir(), "gate-windows-fsync-eperm-"));
+		const file = path.join(dir, "gates.json");
+		let syncs = 0;
+		const store = new FileGateStore(file, () => {
+			syncs++;
+			if (syncs === 2) {
+				const error = new Error("directory fsync unsupported") as NodeJS.ErrnoException;
+				error.code = "EPERM";
+				throw error;
+			}
+		});
+
+		expect(() =>
+			new WorkflowGateBroker("run-windows-fsync-eperm", store).openGate(
+				{ stage: "deep-interview", kind: "question", schema: { type: "string" } },
+				liveContinuation(),
+			),
+		).not.toThrow();
+		expect(syncs).toBeGreaterThanOrEqual(2);
+	});
+
+	it("does not ignore Windows EPERM for the file fsync", () => {
+		const dir = mkdtempSync(path.join(tmpdir(), "gate-windows-file-fsync-eperm-"));
+		const file = path.join(dir, "gates.json");
+		const store = new FileGateStore(file, () => {
+			const error = new Error("file fsync denied") as NodeJS.ErrnoException;
+			error.code = "EPERM";
+			throw error;
+		});
+
+		expect(() =>
+			new WorkflowGateBroker("run-windows-file-fsync-eperm", store).openGate(
+				{ stage: "deep-interview", kind: "question", schema: { type: "string" } },
+				liveContinuation(),
+			),
+		).toThrow(/file fsync denied/);
+	});
 	it("quarantines a disk-accepted record after post-rename fsync uncertainty instead of reissuing it", async () => {
 		const file = path.join(mkdtempSync(path.join(tmpdir(), "gate-uncertain-accepted-")), "gates.json");
 		let syncs = 0;

@@ -939,7 +939,7 @@ function assertPersistedGate(
 function isUnsupportedWindowsDirectorySyncError(error: unknown): boolean {
 	if (process.platform !== "win32") return false;
 	const code = (error as NodeJS.ErrnoException | undefined)?.code;
-	return code === "EINVAL" || code === "ENOTSUP" || code === "EOPNOTSUPP";
+	return code === "EPERM" || code === "EINVAL" || code === "ENOTSUP" || code === "EOPNOTSUPP";
 }
 
 /** A write may have reached `rename` but not the directory fsync durability barrier. */

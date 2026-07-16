@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+### Fixed
+- Windows startup no longer fails when the parent-directory durability sync reports `EPERM`; the compatibility handling remains limited to directory fsync, while ordinary file sync failures still propagate.
 
 ## [0.11.0] - 2026-07-15
 
