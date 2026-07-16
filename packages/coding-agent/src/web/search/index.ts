@@ -138,7 +138,7 @@ function formatForLLM(response: SearchResponse): string {
 		}
 	}
 
-	return parts.join("\n");
+	return `<untrusted-content>\n${parts.join("\n").replaceAll("</untrusted-content>", "&lt;/untrusted-content>")}\n</untrusted-content>`;
 }
 
 interface ExecuteSearchOptions {

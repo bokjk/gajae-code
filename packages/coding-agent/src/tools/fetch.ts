@@ -1379,6 +1379,13 @@ export async function loadReadUrlCacheEntry(
 	return fresh;
 }
 
+const UNTRUSTED_CONTENT_OPEN = "<untrusted-content>";
+const UNTRUSTED_CONTENT_CLOSE = "</untrusted-content>";
+
+function wrapUntrustedContent(content: string): string {
+	return `${UNTRUSTED_CONTENT_OPEN}\n${content.replaceAll(UNTRUSTED_CONTENT_CLOSE, "&lt;/untrusted-content>")}\n${UNTRUSTED_CONTENT_CLOSE}`;
+}
+
 function buildUrlReadOutput(result: FetchRenderResult, content: string): string {
 	let output = "";
 	output += `URL: ${result.finalUrl}\n`;
@@ -1413,7 +1420,7 @@ export async function executeReadUrl(
 		truncated: Boolean(cacheEntry.details.truncated || needsArtifact),
 	};
 
-	const contentBlocks: Array<TextContent | ImageContent> = [{ type: "text", text: output }];
+	const contentBlocks: Array<TextContent | ImageContent> = [{ type: "text", text: wrapUntrustedContent(output) }];
 	if (cacheEntry.image) {
 		contentBlocks.push({ type: "image", data: cacheEntry.image.data, mimeType: cacheEntry.image.mimeType });
 	}
