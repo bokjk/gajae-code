@@ -605,6 +605,8 @@ Resolution precedence for exact selectors:
 3. exact bare concrete id still works
 4. fuzzy and glob matching run after the exact paths
 
+Thinking suffixes are split once from the final `:` only after the complete selector does not resolve. This preserves concrete OpenRouter route IDs such as `openrouter/z-ai/glm-4.7:nitro`; `:high` can follow that route suffix. Multiple suffixes are not recursively consumed. Provider and model matching is case-insensitive, and case-only duplicate catalog entries fall through to bare-ID ranking rather than using a case-sensitive exact-selector pre-pass.
+
 ### Initial model selection priority
 
 `findInitialModel(...)` uses this order:

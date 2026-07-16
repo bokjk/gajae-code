@@ -414,13 +414,12 @@ describe("parseModelPattern", () => {
 			expect(result.warning).toContain("random");
 		});
 
-		test("qwen3-coder:exacto:high:random returns model with undefined thinking level and warning", () => {
+		test("does not recursively consume multiple suffixes", () => {
 			const result = parseModelPattern("qwen/qwen3-coder:exacto:high:random", allModels);
-			expect(result.model?.id).toBe("qwen/qwen3-coder:exacto");
+			expect(result.model).toBeUndefined();
 			expect(result.thinkingLevel).toBeUndefined();
 			expect(result.explicitThinkingLevel).toBe(false);
-			expect(result.warning).toContain("Invalid thinking level");
-			expect(result.warning).toContain("random");
+			expect(result.warning).toBeUndefined();
 		});
 	});
 
