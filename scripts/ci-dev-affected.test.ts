@@ -96,8 +96,13 @@ describe("dev-ci canonical-plan workflow contract", () => {
 			expect(step).toContain(receiptConsumerCondition);
 		}
 		expect(aggregateWorkflow).toContain("if: ${{ always() }}");
-		const aggregateValidationStep = aggregateWorkflow.slice(aggregateWorkflow.indexOf("name: Aggregate affected path validation shards"));
-		expect(aggregateValidationStep).not.toContain("if:");
+		const aggregateValidationStart = aggregateWorkflow.indexOf("name: Aggregate affected path validation shards");
+		const aggregateValidationEnd = aggregateWorkflow.indexOf("\n      - name:", aggregateValidationStart + 1);
+		const aggregateValidationStep = aggregateWorkflow.slice(
+			aggregateValidationStart,
+			aggregateValidationEnd === -1 ? undefined : aggregateValidationEnd,
+		);
+		expect(aggregateValidationStep).not.toContain("\n        if:");
 	});
 
 	test("aggregate result truth table rejects every missing, failed, cancelled, and unplanned dependency", () => {

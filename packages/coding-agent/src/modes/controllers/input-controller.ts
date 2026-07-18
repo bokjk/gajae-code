@@ -1743,7 +1743,7 @@ export class InputController {
 		}
 
 		const actions = [...this.#commandPaletteActions.values()];
-		const slashCommands = this.ctx.getSlashCommands?.() ?? this.#slashCommands;
+		const slashCommands = [...(this.ctx.getSlashCommands?.() ?? this.#slashCommands)];
 		if (!this.ctx.showCommandPalette) {
 			let overlayHandle: ReturnType<typeof this.ctx.ui.showOverlay> | undefined;
 			const close = () => {

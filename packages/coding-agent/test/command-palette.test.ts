@@ -153,7 +153,8 @@ describe("CommandPalette", () => {
 			forwardedCommands = commands;
 		};
 		new InputController(ctx).openCommandPalette();
-		expect(forwardedCommands).toBe(liveCommands);
+		expect(forwardedCommands).toEqual(liveCommands);
+		expect(forwardedCommands).not.toBe(liveCommands);
 	});
 
 	it("restores composer focus before executing a selected registry action", async () => {
@@ -183,8 +184,8 @@ describe("CommandPalette", () => {
 				hasForegroundBashBackgroundRequestHandler: () => false,
 			},
 			chatContainer: { children: [] },
-			goalModeEnabled: false,
-			handlePlanModeCommand: () => order.push("execute"),
+			goalModeController: { enabled: false, paused: false, handleCommand: async () => {} },
+			planModeController: { enabled: false, handleCommand: async () => order.push("execute") },
 			showError: () => {},
 			showStatus: () => {},
 			historyStorage: { getRecent: () => [] },
