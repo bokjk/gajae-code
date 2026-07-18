@@ -106,8 +106,14 @@ describe("CommandPalette", () => {
 		expect(output).not.toContain("Command 0");
 	});
 
-	it("uses the resolved slash command catalog for palette entries", () => {
+	it("uses the live slash command registry for both palette routes", () => {
 		let overlay: CommandPalette | undefined;
+		const liveCommands = [
+			{ name: "clear", description: "Built-in command" },
+			{ name: "extension:demo", description: "Extension command" },
+			{ name: "custom:demo", description: "Custom command" },
+			{ name: "skill:demo", description: "Demo skill" },
+		];
 		const ctx = {
 			editor: { getText: () => "", setText: () => {}, onSubmit: async () => {} },
 			ui: {
@@ -136,17 +142,18 @@ describe("CommandPalette", () => {
 			showStatus: () => {},
 			historyStorage: { getRecent: () => [] },
 			skillCommands: new Map([["skill:demo", { description: "Demo skill" }]]),
-			getSlashCommands: () => [
-				{ name: "clear", description: "Built-in command" },
-				{ name: "extension:demo", description: "Extension command" },
-				{ name: "custom:demo", description: "Custom command" },
-				{ name: "skill:demo", description: "Demo skill" },
-			],
+			getSlashCommands: () => liveCommands,
 		} as unknown as InteractiveModeContext;
 		new InputController(ctx).openCommandPalette();
 		expect(overlay?.getEntries().map(entry => entry.label)).toEqual(
 			expect.arrayContaining(["/clear", "/extension:demo", "/custom:demo", "/skill:demo"]),
 		);
+		let forwardedCommands: unknown;
+		ctx.showCommandPalette = commands => {
+			forwardedCommands = commands;
+		};
+		new InputController(ctx).openCommandPalette();
+		expect(forwardedCommands).toBe(liveCommands);
 	});
 
 	it("restores composer focus before executing a selected registry action", async () => {
