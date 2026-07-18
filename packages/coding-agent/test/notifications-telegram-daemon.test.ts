@@ -528,6 +528,30 @@ describe("telegram daemon", () => {
 		);
 		expect(results.filter(r => r.acquired)).toHaveLength(1);
 	});
+	test.each([
+		"",
+		"{not json",
+		JSON.stringify({ pid: "invalid", startedAt: 0 }),
+	])("missing state reclaims unusable legacy lock metadata %j", async lockMetadata => {
+		const agentDir = tempAgentDir();
+		const s = setPrivateAgentDir(settings(agentDir), agentDir);
+		const paths = daemonPaths(agentDir);
+		fs.mkdirSync(paths.dir, { recursive: true });
+		fs.writeFileSync(paths.lock, lockMetadata);
+
+		await expect(
+			acquireDaemonOwnership({
+				settings: s,
+				tokenFingerprint: "fp",
+				chatId: "42",
+				pid: 222,
+				now: () => 30_000,
+				pidAlive: () => false,
+				randomId: () => "successor",
+			}),
+		).resolves.toMatchObject({ acquired: true, ownerId: "successor" });
+		expect((await readDaemonState(s))?.pid).toBe(222);
+	});
 	test("stopped state with a retained lock is taken over even when its PID is live", async () => {
 		const agentDir = tempAgentDir();
 		const s = setPrivateAgentDir(settings(agentDir), agentDir);
@@ -8127,7 +8151,9 @@ describe("Telegram tool activity capability and routing", () => {
 });
 
 describe("telegram daemon /btw reservation and capability boundaries", () => {
-	async function daemonWithTopic(input: { enabled?: boolean; capability?: boolean } = {}) {
+	async function daemonWithTopic(
+		input: { enabled?: boolean; capability?: boolean; rich?: boolean; now?: () => number } = {},
+	) {
 		FakeWs.instances = [];
 		const agentDir = tempAgentDir();
 		const bot = new FakeBotApi();
@@ -8137,6 +8163,8 @@ describe("telegram daemon /btw reservation and capability boundaries", () => {
 			botToken: "tok",
 			chatId: "42",
 			botApi: bot,
+			rich: { enabled: input.rich ?? true },
+			now: input.now,
 			WebSocketImpl: FakeWs as any,
 			btw: { enabled: input.enabled ?? true },
 		});
@@ -8285,6 +8313,241 @@ describe("telegram daemon /btw reservation and capability boundaries", () => {
 			FakeWs.instances[0]!.sent.map(frame => JSON.parse(frame)).some(frame => frame.type === "ephemeral_turn"),
 		).toBe(false);
 	});
+	test("queues split /btw HTML fallback chunks through the shared rate limiter in order", async () => {
+		const now = () => 1_000;
+		const { bot, daemon, threadId } = await daemonWithTopic({ rich: false, now });
+		await daemon.handleTelegramUpdate({
+			update_id: 806,
+			message: { chat: { id: 42 }, message_thread_id: threadId, text: "/btw split", message_id: 1806 },
+		});
+		const session = daemon.sessions.get("S")!;
+		const request = (session.ws as unknown as FakeWs).sent
+			.map(frame => JSON.parse(frame) as Record<string, unknown>)
+			.find(frame => frame.type === "ephemeral_turn")!;
+		const markdown = `# Split answer\n\n${"가".repeat(9_000)}`;
+		const expectedChunks = splitTelegramHtml(markdownToTelegramHtml(markdown));
+		expect(expectedChunks.length).toBeGreaterThan(1);
+		const pool = (daemon as unknown as { pool: { availableTokens(nowMs?: number): number } }).pool;
+		const tokensBefore = pool.availableTokens();
+		bot.calls = [];
+
+		await daemon.handleSessionMessage(session, {
+			...request,
+			type: "ephemeral_turn_result",
+			status: "ok",
+			text: markdown,
+		});
+
+		const sends = bot.calls.filter(call => call.method === "sendMessage");
+		expect(sends.map(call => call.body.text)).toEqual(expectedChunks);
+		expect(sends[0]?.body.reply_parameters).toEqual({ message_id: 1806 });
+		expect(sends.slice(1).every(call => call.body.reply_parameters === undefined)).toBe(true);
+		expect(sends.every(call => call.options?.noRetry === true)).toBe(true);
+		expect(tokensBefore - pool.availableTokens()).toBe(expectedChunks.length);
+	});
+	test("stops split /btw fallback after a rejected chunk without retrying or reordering", async () => {
+		const now = () => 2_000;
+		const { bot, daemon, threadId } = await daemonWithTopic({ rich: false, now });
+		await daemon.handleTelegramUpdate({
+			update_id: 807,
+			message: { chat: { id: 42 }, message_thread_id: threadId, text: "/btw partial", message_id: 1807 },
+		});
+		const session = daemon.sessions.get("S")!;
+		const request = (session.ws as unknown as FakeWs).sent
+			.map(frame => JSON.parse(frame) as Record<string, unknown>)
+			.find(frame => frame.type === "ephemeral_turn")!;
+		const markdown = "나".repeat(12_000);
+		const expectedChunks = splitTelegramHtml(markdownToTelegramHtml(markdown));
+		expect(expectedChunks.length).toBeGreaterThan(2);
+		const normalCall = bot.call.bind(bot);
+		let attempts = 0;
+		bot.calls = [];
+		bot.call = async (method, body, options) => {
+			if (method === "sendMessage" && expectedChunks.includes((body as { text?: string }).text ?? "")) {
+				bot.calls.push({ method, body, options });
+				attempts += 1;
+				return attempts === 2 ? { ok: false, description: "rejected" } : { ok: true, result: { message_id: 1 } };
+			}
+			return normalCall(method, body, options);
+		};
+
+		await daemon.handleSessionMessage(session, {
+			...request,
+			type: "ephemeral_turn_result",
+			status: "ok",
+			text: markdown,
+		});
+
+		const sends = bot.calls.filter(call => call.method === "sendMessage");
+		expect(sends.map(call => call.body.text)).toEqual(expectedChunks.slice(0, 2));
+		expect(sends.every(call => call.options?.noRetry === true)).toBe(true);
+		expect(attempts).toBe(2);
+	});
+
+	test("removes a queued stale /btw fallback before reconnect replay", async () => {
+		const now = () => 3_000;
+		const { bot, daemon, threadId } = await daemonWithTopic({ rich: false, now });
+		const internal = daemon as unknown as {
+			pool: {
+				availableTokens(nowMs?: number): number;
+				pending: number;
+				submit(item: object): void;
+			};
+			flushPool(): Promise<void>;
+		};
+		const available = Math.floor(internal.pool.availableTokens());
+		expect(available).toBeGreaterThan(0);
+		for (let index = 0; index < available; index++) {
+			internal.pool.submit({
+				sessionId: "token-drain",
+				lane: "idle",
+				itemId: `token-drain:${index}`,
+				payload: {
+					send: { method: "sendMessage", lane: "idle", text: `drain ${index}` },
+				},
+			});
+		}
+		await internal.flushPool();
+		expect(internal.pool.availableTokens()).toBe(0);
+		bot.calls = [];
+
+		await daemon.handleTelegramUpdate({
+			update_id: 808,
+			message: { chat: { id: 42 }, message_thread_id: threadId, text: "/btw queued", message_id: 1808 },
+		});
+		const session = daemon.sessions.get("S")!;
+		const socket = session.ws as unknown as FakeWs;
+		const request = socket.sent
+			.map(frame => JSON.parse(frame) as Record<string, unknown>)
+			.find(frame => frame.type === "ephemeral_turn")!;
+		const handling = daemon.handleSessionMessage(session, {
+			...request,
+			type: "ephemeral_turn_result",
+			status: "ok",
+			text: "queued answer",
+		});
+		await Bun.sleep(0);
+		expect(internal.pool.pending).toBe(1);
+
+		socket.close();
+		await handling;
+		expect(internal.pool.pending).toBe(0);
+		expect(bot.calls.filter(call => call.method === "sendMessage")).toEqual([]);
+
+		daemon.connectSession("S", "ws://s", "ts");
+		await enableEphemeralTurns(daemon);
+		const replacement = daemon.sessions.get("S")!.ws as unknown as FakeWs;
+		expect(
+			replacement.sent
+				.map(frame => JSON.parse(frame) as Record<string, unknown>)
+				.find(frame => frame.type === "ephemeral_turn"),
+		).toMatchObject({ ...request, type: "ephemeral_turn", question: "queued" });
+	});
+
+	test("reports true /btw capacity once and reuses completed tombstone capacity", async () => {
+		const { bot, daemon, threadId } = await daemonWithTopic();
+		const session = daemon.sessions.get("S")!;
+		const socket = session.ws as unknown as FakeWs;
+		const requests = () =>
+			socket.sent
+				.map(frame => JSON.parse(frame) as Record<string, unknown>)
+				.filter(frame => frame.type === "ephemeral_turn");
+		bot.calls = [];
+		for (let index = 0; index < 256; index++) {
+			await daemon.handleTelegramUpdate({
+				update_id: 10_000 + index,
+				message: {
+					chat: { id: 42 },
+					message_thread_id: threadId,
+					text: `/btw pending ${index}`,
+					message_id: 20_000 + index,
+				},
+			});
+		}
+		expect(requests()).toHaveLength(256);
+
+		const capacityUpdate = {
+			update_id: 10_256,
+			message: {
+				chat: { id: 42 },
+				message_thread_id: threadId,
+				text: "/btw over capacity",
+				message_id: 20_256,
+			},
+		};
+		await daemon.handleTelegramUpdate(capacityUpdate);
+		await daemon.handleTelegramUpdate(capacityUpdate);
+		const capacityReplies = () =>
+			bot.calls.filter(
+				call =>
+					call.method === "sendMessage" &&
+					call.body.text === "Too many /btw questions are pending. Wait for one to finish and try again.",
+			);
+		expect(capacityReplies()).toEqual([
+			expect.objectContaining({
+				body: expect.objectContaining({
+					message_thread_id: threadId,
+					reply_parameters: { message_id: 20_256 },
+				}),
+				options: expect.objectContaining({ noRetry: true }),
+			}),
+		]);
+		expect(requests()).toHaveLength(256);
+		const normalCall = bot.call.bind(bot);
+		let unknownCapacityAttempts = 0;
+		bot.call = async (method, body, options) => {
+			if (
+				method === "sendMessage" &&
+				(body as { reply_parameters?: { message_id?: unknown } }).reply_parameters?.message_id === 20_258
+			) {
+				bot.calls.push({ method, body, options });
+				unknownCapacityAttempts += 1;
+				throw new Error("capacity delivery outcome unknown");
+			}
+			return normalCall(method, body, options);
+		};
+		const unknownCapacityUpdate = {
+			update_id: 10_258,
+			message: {
+				chat: { id: 42 },
+				message_thread_id: threadId,
+				text: "/btw unknown capacity delivery",
+				message_id: 20_258,
+			},
+		};
+		await expect(daemon.handleTelegramUpdate(unknownCapacityUpdate)).rejects.toThrow(
+			"capacity delivery outcome unknown",
+		);
+		await daemon.handleTelegramUpdate(unknownCapacityUpdate);
+		expect(unknownCapacityAttempts).toBe(1);
+		expect(capacityReplies().at(-1)).toMatchObject({
+			body: expect.objectContaining({ reply_parameters: { message_id: 20_258 } }),
+			options: expect.objectContaining({ noRetry: true }),
+		});
+		expect(requests()).toHaveLength(256);
+		const capacityReplyCountBeforeReuse = capacityReplies().length;
+		bot.call = normalCall;
+
+		const completed = requests()[0]!;
+		await daemon.handleSessionMessage(session, {
+			...completed,
+			type: "ephemeral_turn_result",
+			status: "failed",
+		});
+		await daemon.handleTelegramUpdate({
+			update_id: 10_257,
+			message: {
+				chat: { id: 42 },
+				message_thread_id: threadId,
+				text: "/btw after completion",
+				message_id: 20_257,
+			},
+		});
+
+		expect(requests()).toHaveLength(257);
+		expect(requests().at(-1)).toMatchObject({ question: "after completion", messageId: 20_257 });
+		expect(capacityReplies()).toHaveLength(capacityReplyCountBeforeReuse);
+	}, 30_000);
 	test("reserves /btw updates before visible replies and host execution", async () => {
 		const { agentDir, bot, daemon, threadId } = await unavailableControlHarness();
 		await enableEphemeralTurns(daemon);

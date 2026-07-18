@@ -196,6 +196,7 @@ const BTW_PENDING_TTL_MS = 300_000;
 const BTW_MAX_PENDING = 256;
 const BTW_SHUTDOWN_JOIN_MS = 1_000;
 const BTW_USAGE_TEXT = "Usage: /btw <question>";
+const BTW_CAPACITY_TEXT = "Too many /btw questions are pending. Wait for one to finish and try again.";
 type ParsedBtwCommand = { kind: "question"; question: string } | { kind: "ignored" };
 class ThreadedModeCapabilityRefusal extends Error {}
 
@@ -567,15 +568,22 @@ export async function acquireDaemonOwnership(input: {
 	const roots = input.roots ?? (await readJson<{ roots?: string[] }>(fsImpl, paths.roots))?.roots ?? [];
 	return withFileLock(paths.ownership, async () => {
 		const lockIsPositivelyStale = async (): Promise<boolean> => {
-			const initialization = await readJson<{ pid?: unknown; startedAt?: unknown }>(fsImpl, paths.lock);
-			return Boolean(
-				initialization &&
-					validDaemonPid(initialization.pid) &&
-					typeof initialization.startedAt === "number" &&
-					Number.isFinite(initialization.startedAt) &&
-					now() - initialization.startedAt > HEARTBEAT_TTL_MS &&
-					!pidAlive(initialization.pid),
-			);
+			let initialization: { pid?: unknown; startedAt?: unknown } | undefined;
+			try {
+				initialization = await readJson<{ pid?: unknown; startedAt?: unknown }>(fsImpl, paths.lock);
+			} catch {
+				// Legacy daemons wrote an empty lock file. With no live state to
+				// identify an owner, malformed metadata must not wedge startup.
+				return true;
+			}
+			if (!initialization) return true;
+			if (
+				!validDaemonPid(initialization.pid) ||
+				typeof initialization.startedAt !== "number" ||
+				!Number.isFinite(initialization.startedAt)
+			)
+				return true;
+			return now() - initialization.startedAt > HEARTBEAT_TTL_MS && !pidAlive(initialization.pid);
 		};
 		const ownershipIsPositivelyStale = async (state: DaemonState | undefined): Promise<boolean> => {
 			if (state?.stoppedAt !== undefined) return true;
@@ -1362,6 +1370,15 @@ type SelectedAckOutcome =
 	| { status: "delivered"; messageId: number }
 	| { status: "failed"; reason: "route_missing" | "expired" | "cancelled" | "telegram_rejected" }
 	| { status: "unknown"; reason: "transport_ambiguous" | "shutdown" };
+type BtwQueuedDeliveryOutcome = "accepted" | "not_delivered" | "uncertain" | "stale";
+
+interface BtwQueuedDelivery {
+	pending: PendingBtwTurn;
+	body: Record<string, unknown>;
+	signal: AbortSignal;
+	isAuthoritative: () => boolean;
+	finish: (outcome: BtwQueuedDeliveryOutcome) => void;
+}
 
 interface SelectedAckQueueItem {
 	pendingKey: string;
@@ -1379,6 +1396,7 @@ interface TelegramQueuePayload {
 	send: ThreadedSend;
 	topicId?: string;
 	selectedAck?: SelectedAckQueueItem;
+	btwDelivery?: BtwQueuedDelivery;
 }
 
 interface PendingBtwTurn {
@@ -2366,6 +2384,11 @@ export class TelegramNotificationDaemon {
 		for (const [requestId, tombstone] of this.#btwTerminalTombstones)
 			if (tombstone.expiresAt <= now) this.#btwTerminalTombstones.delete(requestId);
 	}
+	#finishQueuedBtwDeliveries(pending: PendingBtwTurn, outcome: BtwQueuedDeliveryOutcome): void {
+		for (const item of this.pool.removeWhere(item => item.payload.btwDelivery?.pending === pending)) {
+			item.payload.btwDelivery?.finish(outcome);
+		}
+	}
 	#takeBtwTurn(requestId: string, pending: PendingBtwTurn): boolean {
 		if (this.#pendingBtwTurns.get(requestId) !== pending) return false;
 		this.#pendingBtwTurns.delete(requestId);
@@ -2384,12 +2407,14 @@ export class TelegramNotificationDaemon {
 		for (const delivery of this.#btwTerminalDeliveries.values()) {
 			const pending = delivery.pending;
 			if (
-				pending.transportSessionId === session.sessionId &&
-				pending.logicalSessionId === this.#logicalSessionId(session) &&
-				pending.endpointDigest === session.endpointDigest &&
-				pending.generation === session.hostGeneration
+				pending.transportSessionId !== session.sessionId ||
+				pending.logicalSessionId !== this.#logicalSessionId(session) ||
+				pending.endpointDigest !== session.endpointDigest ||
+				pending.generation !== session.hostGeneration
 			)
-				delivery.invalidated = true;
+				continue;
+			delivery.invalidated = true;
+			this.#finishQueuedBtwDeliveries(pending, "stale");
 		}
 	}
 	#terminalizeBtwTurnsForEndpointReplacement(sessionId: string, endpointDigest: string): void {
@@ -2481,6 +2506,7 @@ export class TelegramNotificationDaemon {
 		if (delivery?.pending === pending) {
 			delivery.invalidated = true;
 			delivery.terminalizeOnInvalidation = true;
+			this.#finishQueuedBtwDeliveries(pending, "stale");
 			if (allowWhileStopping || waitForInFlight) await delivery.finished;
 			return;
 		}
@@ -2523,6 +2549,61 @@ export class TelegramNotificationDaemon {
 				signal: AbortSignal.any(signals),
 			},
 		);
+	}
+	async #queueBtwFallbackChunk(input: {
+		requestId: string;
+		chunkIndex: number;
+		pending: PendingBtwTurn;
+		body: Record<string, unknown>;
+		signal: AbortSignal;
+		isAuthoritative: () => boolean;
+	}): Promise<BtwQueuedDeliveryOutcome> {
+		if (input.signal.aborted) return "uncertain";
+		const result = Promise.withResolvers<BtwQueuedDeliveryOutcome>();
+		let settled = false;
+		const finish = (outcome: BtwQueuedDeliveryOutcome): void => {
+			if (settled) return;
+			settled = true;
+			result.resolve(outcome);
+		};
+		const itemId = `btw-delivery:${input.requestId}:${input.chunkIndex}`;
+		const delivery: BtwQueuedDelivery = {
+			pending: input.pending,
+			body: input.body,
+			signal: input.signal,
+			isAuthoritative: input.isAuthoritative,
+			finish,
+		};
+		const abort = (): void => {
+			const removed = this.pool.removeById(itemId);
+			if (removed?.payload.btwDelivery === delivery) finish("uncertain");
+		};
+		input.signal.addEventListener("abort", abort, { once: true });
+		try {
+			this.pool.submit({
+				sessionId: input.pending.transportSessionId,
+				lane: "finalized",
+				itemId,
+				payload: {
+					send: {
+						method: "sendMessage",
+						lane: "finalized",
+						text: String(input.body.text ?? ""),
+					},
+					topicId: input.pending.threadId,
+					btwDelivery: delivery,
+				},
+			});
+			if (input.signal.aborted) abort();
+			else await this.flushPool();
+			return await result.promise;
+		} catch {
+			const removed = this.pool.removeById(itemId);
+			if (removed?.payload.btwDelivery === delivery) finish("uncertain");
+			return "uncertain";
+		} finally {
+			input.signal.removeEventListener("abort", abort);
+		}
 	}
 
 	async #drainBtwTurns(): Promise<void> {
@@ -2573,7 +2654,7 @@ export class TelegramNotificationDaemon {
 		shutdownController.abort("daemon_shutdown");
 		this.#btwDeliveryAbort.abort();
 		this.#btwTerminalTombstones.clear();
-		this.pool.removeWhere(() => true);
+		for (const item of this.pool.removeWhere(() => true)) item.payload.btwDelivery?.finish("uncertain");
 	}
 
 	private deleteMessageRoutes(sessionId: string, actionId?: string): void {
@@ -2862,6 +2943,7 @@ export class TelegramNotificationDaemon {
 			for (const item of removed) {
 				if (item.payload.selectedAck)
 					this.finishSelectedAck(item.payload.selectedAck, { status: "failed", reason: "cancelled" });
+				item.payload.btwDelivery?.finish("stale");
 			}
 			await this.flushPool();
 			const res = (await this.botApi.call("deleteForumTopic", {
@@ -3026,6 +3108,7 @@ export class TelegramNotificationDaemon {
 			if (expiredItem.payload.selectedAck) {
 				this.finishSelectedAck(expiredItem.payload.selectedAck, { status: "failed", reason: "expired" });
 			}
+			expiredItem.payload.btwDelivery?.finish("not_delivered");
 		}
 		// Within a batch a finalized frame supersedes any still-queued live frame for
 		// the same streamed message (finalized outranks live), so drop the stale live
@@ -3049,6 +3132,33 @@ export class TelegramNotificationDaemon {
 			);
 		}
 		for (const item of batch) {
+			const btwDelivery = item.payload.btwDelivery;
+			if (btwDelivery) {
+				if (!btwDelivery.isAuthoritative()) {
+					btwDelivery.finish("stale");
+					continue;
+				}
+				if (btwDelivery.signal.aborted) {
+					btwDelivery.finish("uncertain");
+					continue;
+				}
+				try {
+					const response = await this.botApi.call("sendMessage", btwDelivery.body, {
+						noRetry: true,
+						signal: btwDelivery.signal,
+					});
+					btwDelivery.finish(
+						response && typeof response === "object" && (response as { ok?: unknown }).ok === true
+							? "accepted"
+							: response && typeof response === "object" && (response as { ok?: unknown }).ok === false
+								? "not_delivered"
+								: "uncertain",
+					);
+				} catch {
+					btwDelivery.finish("uncertain");
+				}
+				continue;
+			}
 			const selectedAck = item.payload.selectedAck;
 			if (selectedAck) {
 				const { topicId } = item.payload;
@@ -3746,12 +3856,19 @@ export class TelegramNotificationDaemon {
 				const fallback = async (): Promise<typeof deliveryOutcome> => {
 					let accepted = false;
 					for (const [index, text] of splitTelegramHtml(html).entries()) {
-						const outcome = await deliver("sendMessage", {
-							chat_id: this.opts.chatId,
-							message_thread_id: Number(pending.threadId),
-							...(index === 0 ? { reply_parameters: { message_id: pending.messageId } } : {}),
-							text,
-							parse_mode: TELEGRAM_PARSE_MODE,
+						const outcome = await this.#queueBtwFallbackChunk({
+							requestId,
+							chunkIndex: index,
+							pending,
+							signal,
+							isAuthoritative,
+							body: {
+								chat_id: this.opts.chatId,
+								message_thread_id: Number(pending.threadId),
+								...(index === 0 ? { reply_parameters: { message_id: pending.messageId } } : {}),
+								text,
+								parse_mode: TELEGRAM_PARSE_MODE,
+							},
 						});
 						if (outcome === "accepted") {
 							accepted = true;
@@ -4378,11 +4495,22 @@ export class TelegramNotificationDaemon {
 						for (const [id, pending] of this.#pendingBtwTurns) {
 							if (pending.expiresAt <= (this.opts.now?.() ?? Date.now())) this.#pendingBtwTurns.delete(id);
 						}
-						if (this.#pendingBtwTurns.size + this.#btwTerminalTombstones.size >= BTW_MAX_PENDING) {
-							await this.rememberSeenUpdateId(inbound.updateId);
+						if (!Number.isSafeInteger(inbound.messageId) || inbound.messageId <= 0) return;
+						while (
+							this.#pendingBtwTurns.size + this.#btwTerminalTombstones.size >= BTW_MAX_PENDING &&
+							this.#btwTerminalTombstones.size > 0
+						) {
+							this.#btwTerminalTombstones.delete(this.#btwTerminalTombstones.keys().next().value!);
+						}
+						if (this.#pendingBtwTurns.size >= BTW_MAX_PENDING) {
+							if (!(await this.reserveSeenUpdateId(inbound.updateId))) return;
+							await this.#sendBtwMessage({
+								threadId: inbound.threadId,
+								messageId: inbound.messageId,
+								text: BTW_CAPACITY_TEXT,
+							});
 							return;
 						}
-						if (!Number.isSafeInteger(inbound.messageId) || inbound.messageId <= 0) return;
 						const transportSessionId = session.sessionId;
 						const logicalSessionId = this.#logicalSessionId(session);
 						const requestId = `btw:${crypto.randomUUID()}`;
