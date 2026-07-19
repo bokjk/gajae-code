@@ -52,6 +52,34 @@ describe("native gjc state runtime", () => {
 		expect(result.status).toBe(0);
 		expect(envelopeState(result.stdout)).toEqual({});
 	});
+	it("treats an empty first positional as absent instead of clearing state", async () => {
+		const root = await tempDir();
+		const seed = await runNativeStateCommand(
+			["write", "--mode", "ralplan", "--input", JSON.stringify({ marker: "seed" })],
+			root,
+		);
+		expect(seed.status).toBe(0);
+
+		const result = await runNativeStateCommand(["", "clear", "--mode", "ralplan", "--json"], root);
+		expect(result.status).toBe(0);
+		expect(envelopeState(result.stdout).marker).toBe("seed");
+
+		const retained = await runNativeStateCommand(["read", "--mode", "ralplan", "--json"], root);
+		expect(envelopeState(retained.stdout).marker).toBe("seed");
+	});
+
+	it("treats an empty second positional as absent for an explicit skill read", async () => {
+		const root = await tempDir();
+		const seed = await runNativeStateCommand(
+			["write", "--mode", "ralplan", "--input", JSON.stringify({ marker: "seed" })],
+			root,
+		);
+		expect(seed.status).toBe(0);
+
+		const result = await runNativeStateCommand(["ralplan", "", "--json"], root);
+		expect(result.status).toBe(0);
+		expect(envelopeState(result.stdout).marker).toBe("seed");
+	});
 
 	it("reads corrupt mode-state fail-open as empty state", async () => {
 		const root = await tempDir();
@@ -104,6 +132,64 @@ describe("native gjc state runtime", () => {
 		// verify CLI flag won by reading the underlying file path
 		const ralplanFile = modeStatePath(root, TEST_SESSION_ID, "ralplan");
 		expect(JSON.parse(await fs.readFile(ralplanFile, "utf-8")).active).toBe(true);
+	});
+	it("preserves first-occurrence selector precedence for repeated mode flags", async () => {
+		const root = await tempDir();
+		const seed = await runNativeStateCommand(
+			["write", "--mode", "ralplan", "--input", JSON.stringify({ marker: "seed" })],
+			root,
+		);
+		expect(seed.status).toBe(0);
+
+		const repeated = await runNativeStateCommand(
+			["write", "--mode", "", "--mode", "team", "--input", JSON.stringify({ marker: "runtime-first" })],
+			root,
+		);
+		expect(repeated.status).toBe(0);
+
+		const ralplan = await runNativeStateCommand(["read", "--mode", "ralplan", "--json"], root);
+		const team = await runNativeStateCommand(["read", "--mode", "team", "--json"], root);
+		expect(envelopeState(ralplan.stdout).marker).toBe("runtime-first");
+		expect(envelopeState(team.stdout)).toEqual({});
+	});
+
+	it("preserves first-occurrence selector precedence for repeated input flags", async () => {
+		const root = await tempDir();
+		const seed = await runNativeStateCommand(
+			["write", "--mode", "ralplan", "--input", JSON.stringify({ marker: "seed" })],
+			root,
+		);
+		expect(seed.status).toBe(0);
+
+		const repeated = await runNativeStateCommand(
+			["write", "--input", "{}", "--input", JSON.stringify({ mode: "ralplan", current_phase: "handoff" }), "--json"],
+			root,
+		);
+		expect(repeated.status).toBe(0);
+
+		const result = await runNativeStateCommand(["read", "--mode", "ralplan", "--json"], root);
+		expect(envelopeState(result.stdout)).toMatchObject({ marker: "seed" });
+		expect(envelopeState(result.stdout).current_phase).not.toBe("handoff");
+	});
+
+	it("continues to accept known manifest flags", async () => {
+		const root = await tempDir();
+		const result = await runNativeStateCommand(
+			[
+				"write",
+				"--mode",
+				"ralplan",
+				"--input",
+				JSON.stringify({ marker: "manifest-compatible" }),
+				"--args",
+				"legacy-value",
+			],
+			root,
+		);
+
+		expect(result.status).toBe(0);
+		const state = await runNativeStateCommand(["read", "--mode", "ralplan", "--json"], root);
+		expect(envelopeState(state.stdout).marker).toBe("manifest-compatible");
 	});
 
 	it("merges write payloads while preserving long-lived keys", async () => {
