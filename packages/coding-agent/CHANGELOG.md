@@ -6,6 +6,7 @@
 
 ### Fixed
 - Malformed selectors on internal read URLs now fail explicitly instead of silently falling back to an unbounded resource read.
+- Newly registered earlier resource-GC policies advance the pending sweep without postponing an already earlier sweep.
 
 ## [0.11.3] - 2026-07-19
 ### Added
