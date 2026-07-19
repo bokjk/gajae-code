@@ -460,6 +460,16 @@ mod publication {
 		path::{Path, PathBuf},
 	};
 
+	#[cfg(target_vendor = "apple")]
+	const fn mode_kind(kind: libc::mode_t) -> u32 {
+		kind as u32
+	}
+
+	#[cfg(not(target_vendor = "apple"))]
+	const fn mode_kind(kind: libc::mode_t) -> u32 {
+		kind
+	}
+
 	struct Identity {
 		dev: u64,
 		ino: u64,
@@ -475,7 +485,7 @@ mod publication {
 			file.metadata().is_ok_and(|metadata| {
 				metadata.dev() == self.dev
 					&& metadata.ino() == self.ino
-					&& metadata.mode() & libc::S_IFMT == expected_kind
+					&& metadata.mode() & mode_kind(libc::S_IFMT) == expected_kind
 			})
 		}
 	}
@@ -562,9 +572,9 @@ mod publication {
 						if identity.matches(
 							&file,
 							if directory {
-								libc::S_IFDIR
+								mode_kind(libc::S_IFDIR)
 							} else {
-								libc::S_IFREG
+								mode_kind(libc::S_IFREG)
 							},
 						) =>
 					{
