@@ -1,5 +1,6 @@
 import { afterEach, beforeAll, describe, expect, it, spyOn, vi } from "bun:test";
 import type { AgentToolContext } from "@gajae-code/agent-core";
+import { validateToolArguments } from "@gajae-code/ai/utils/validation";
 import { Settings } from "@gajae-code/coding-agent/config/settings";
 import type { AppendOrMergeResult } from "@gajae-code/coding-agent/gjc-runtime/deep-interview-recorder";
 import * as deepInterviewRecorder from "@gajae-code/coding-agent/gjc-runtime/deep-interview-recorder";
@@ -2613,5 +2614,248 @@ describe("AskTool deep-interview recorder persistence", () => {
 				],
 			}).success,
 		).toBe(false);
+	});
+});
+
+describe("AskTool Round-0 intent recovery", () => {
+	function roundZeroPair(workflowGate?: Record<string, unknown>) {
+		return {
+			questions: [
+				{
+					id: "round-0-intent",
+					question: "Confirm the locked intent",
+					options: [{ label: "Looks right" }, { label: "Approve reduction" }, { label: "Revise" }],
+					...(workflowGate === undefined ? {} : { workflowGate }),
+					deepInterview: {
+						round: 0,
+						component: "review-topology",
+						dimension: "topology",
+						ambiguity: 1,
+						intent_contract: {
+							items: [{ id: "artifact:report", category: "artifact", statement: "Produce a report" }],
+							confirmation_options: ["Looks right"],
+						},
+						intent_review: {
+							observed_items: [{ id: "artifact:report", category: "artifact", statement: "Produce a report" }],
+							supporting_substitutions: [],
+							approval_options: ["Approve reduction"],
+						},
+					},
+				},
+			],
+		};
+	}
+
+	function validateAsk(arguments_: Record<string, unknown>) {
+		return validateToolArguments(new AskTool(createSession()), {
+			type: "toolCall",
+			id: "ask-round-0",
+			name: "ask",
+			arguments: arguments_,
+		});
+	}
+
+	it("recovers only the canonical Round-0 pair and retains the contract", () => {
+		const result = validateAsk(roundZeroPair());
+		const deepInterview = (result.questions[0] as { deepInterview: Record<string, unknown> }).deepInterview;
+		expect(deepInterview.intent_contract).toMatchObject({ confirmation_options: ["Looks right"] });
+		expect(deepInterview.intent_review).toBeUndefined();
+	});
+
+	it("treats the explicit deep-interview question workflow gate as equivalent", () => {
+		const result = validateAsk(roundZeroPair({ stage: "deep-interview", kind: "question" }));
+		expect((result.questions[0] as { workflowGate: unknown }).workflowGate).toEqual({
+			stage: "deep-interview",
+			kind: "question",
+		});
+	});
+
+	it("normalizes strict-provider null placeholders before exact Round-0 recovery", () => {
+		const pair = roundZeroPair();
+		Object.assign(pair.questions[0], { multi: null, recommended: null, workflowGate: null });
+		Object.assign(pair.questions[0].deepInterview, { round_id: null });
+		const question = validateAsk(pair).questions[0];
+		expect(question).toMatchObject({ deepInterview: { intent_contract: expect.any(Object) } });
+		expect(question.deepInterview).not.toHaveProperty("intent_review");
+		expect(question.deepInterview).not.toHaveProperty("round_id");
+		expect(question).not.toHaveProperty("multi");
+		expect(question).not.toHaveProperty("recommended");
+		expect(question).not.toHaveProperty("workflowGate");
+	});
+
+	it("terminally rejects every recovery-shaped near-miss before coercion", () => {
+		const recorder = spyOn(deepInterviewRecorder, "appendOrMergeDeepInterviewRound");
+		const gateEmitter = { isUnattended: () => true, emitGate: vi.fn() };
+		const tool = new AskTool(
+			createSession({ hasUI: false, getWorkflowGateEmitter: () => gateEmitter } as Partial<ToolSession>),
+		);
+		const execute = spyOn(tool, "execute");
+		const validateCandidate = (arguments_: Record<string, unknown>) =>
+			validateToolArguments(tool, {
+				type: "toolCall",
+				id: "ask-round-0-rejected",
+				name: "ask",
+				arguments: arguments_,
+			});
+		const prototypeRoot = Object.assign(Object.create({ inherited: true }), roundZeroPair());
+		const prototypeQuestion = roundZeroPair();
+		prototypeQuestion.questions[0] = Object.assign(
+			Object.create({ inherited: true }),
+			prototypeQuestion.questions[0],
+		);
+		const prototypeDeep = roundZeroPair();
+		prototypeDeep.questions[0].deepInterview = Object.assign(
+			Object.create({ inherited: true }),
+			prototypeDeep.questions[0].deepInterview,
+		);
+		const extraRoot = { ...roundZeroPair(), extra: true };
+		const extraQuestion = roundZeroPair();
+		Object.assign(extraQuestion.questions[0], { extra: true });
+		const extraDeep = roundZeroPair();
+		Object.assign(extraDeep.questions[0].deepInterview, { extra: true });
+		const duplicateOptions = roundZeroPair();
+		duplicateOptions.questions[0].options = [{ label: "Looks right" }, { label: "Looks right" }];
+		const ownUndefinedGate = roundZeroPair();
+		ownUndefinedGate.questions[0].workflowGate = undefined;
+		const reviewOnlyRoundZero = roundZeroPair();
+		Reflect.deleteProperty(reviewOnlyRoundZero.questions[0].deepInterview, "intent_contract");
+		const multipleQuestions = roundZeroPair();
+		multipleQuestions.questions.push(structuredClone(multipleQuestions.questions[0]));
+		const invalidLabels = roundZeroPair();
+		invalidLabels.questions[0].deepInterview.intent_contract.confirmation_options = ["Looks right", "Looks right"];
+		const encodedRoot = JSON.stringify(roundZeroPair()) as unknown as Record<string, unknown>;
+		const encodedQuestions = roundZeroPair();
+		encodedQuestions.questions = JSON.stringify(encodedQuestions.questions) as never;
+		const encodedQuestion = roundZeroPair();
+		encodedQuestion.questions[0] = JSON.stringify(encodedQuestion.questions[0]) as never;
+		const encodedDeepInterview = roundZeroPair();
+		encodedDeepInterview.questions[0].deepInterview = JSON.stringify(
+			encodedDeepInterview.questions[0].deepInterview,
+		) as never;
+		const nullQuestions = { questions: null } as unknown as Record<string, unknown>;
+		const nullDeepInterview = roundZeroPair();
+		nullDeepInterview.questions[0].deepInterview = null as never;
+		const malformedContractOnly = roundZeroPair();
+		Reflect.deleteProperty(malformedContractOnly.questions[0].deepInterview, "intent_review");
+		malformedContractOnly.questions[0].deepInterview.round = 1;
+		const malformedReviewOnly = roundZeroPair();
+		Reflect.deleteProperty(malformedReviewOnly.questions[0].deepInterview, "intent_contract");
+		malformedReviewOnly.questions[0].deepInterview.round = 1;
+		malformedReviewOnly.questions[0].deepInterview.component = "locked-intent";
+		malformedReviewOnly.questions[0].deepInterview.dimension = "constraints";
+		malformedReviewOnly.questions[0].deepInterview.intent_review.approval_options = ["Not displayed"];
+
+		const invalidGates: unknown[] = [
+			"deep-interview/question",
+			[],
+			{ stage: "deep-interview" },
+			{ kind: "question" },
+			{ stage: "deep-interview", kind: "question", extra: true },
+			{ stage: "Deep-Interview", kind: "question" },
+			{ stage: "deep-interview ", kind: "question" },
+			{ stage: "ralplan", kind: "question" },
+			{ stage: "ralplan", kind: "approval" },
+			{ stage: "ultragoal", kind: "question" },
+			{ stage: "ultragoal", kind: "execution" },
+		];
+		const malformedIntentMetadata: unknown[] = [null, "{}", [], { items: [] }, { items: [], extra: true }];
+
+		for (const arguments_ of [
+			prototypeRoot,
+			prototypeQuestion,
+			prototypeDeep,
+			extraRoot,
+			extraQuestion,
+			extraDeep,
+			duplicateOptions,
+			ownUndefinedGate,
+			reviewOnlyRoundZero,
+			multipleQuestions,
+			invalidLabels,
+			encodedRoot,
+			encodedQuestions,
+			encodedQuestion,
+			encodedDeepInterview,
+			nullQuestions,
+			nullDeepInterview,
+			malformedContractOnly,
+			malformedReviewOnly,
+		]) {
+			expect(() => validateCandidate(arguments_)).toThrow("raw arguments rejected before coercion");
+		}
+		for (const workflowGate of invalidGates) {
+			const pair = roundZeroPair();
+			pair.questions[0].workflowGate = workflowGate as Record<string, unknown>;
+			expect(() => validateCandidate(pair)).toThrow("raw arguments rejected before coercion");
+		}
+		for (const intentContract of malformedIntentMetadata) {
+			const pair = roundZeroPair();
+			pair.questions[0].deepInterview.intent_contract = intentContract as never;
+			expect(() => validateCandidate(pair)).toThrow("raw arguments rejected before coercion");
+		}
+		for (const intentReview of malformedIntentMetadata) {
+			const pair = roundZeroPair();
+			pair.questions[0].deepInterview.intent_review = intentReview as never;
+			expect(() => validateCandidate(pair)).toThrow("raw arguments rejected before coercion");
+		}
+		expect(execute).not.toHaveBeenCalled();
+		expect(gateEmitter.emitGate).not.toHaveBeenCalled();
+		expect(recorder).not.toHaveBeenCalled();
+	});
+
+	it("recovers the canonical pair once, emits its exact gate, and records only the contract", async () => {
+		const recorder = spyOn(deepInterviewRecorder, "appendOrMergeDeepInterviewRound").mockResolvedValue({
+			action: "created",
+			record: {} as AppendOrMergeResult["record"],
+		});
+		spyOn(deepInterviewRecorder, "syncDeepInterviewRecorderHud").mockResolvedValue(undefined);
+		const gateEmitter = {
+			isUnattended: () => true,
+			emitGate: vi.fn(async () => ({ selected: ["Looks right"] })),
+		};
+		const tool = new AskTool(
+			createSession({ hasUI: false, getSessionId: () => "round-zero", getWorkflowGateEmitter: () => gateEmitter }),
+		);
+		const rawHook = spyOn(tool, "rawArgumentValidation");
+		const execute = spyOn(tool, "execute");
+		const recovered = askSchema.parse(
+			validateToolArguments(tool, {
+				type: "toolCall",
+				id: "ask-round-0-recovered",
+				name: "ask",
+				arguments: roundZeroPair(),
+			}),
+		);
+
+		await tool.execute("ask-round-0-recovered", recovered, undefined, undefined, undefined);
+
+		expect(rawHook).toHaveBeenCalledTimes(1);
+		expect(execute).toHaveBeenCalledTimes(1);
+		expect(gateEmitter.emitGate).toHaveBeenCalledTimes(1);
+		expect((gateEmitter.emitGate.mock.calls as unknown as Array<[unknown]>)[0]?.[0]).toMatchObject({
+			stage: "deep-interview",
+			kind: "question",
+		});
+		expect(recorder).toHaveBeenCalledTimes(1);
+		expect(recorder.mock.calls[0]?.[2]).toMatchObject({
+			intent_contract: { confirmation_options: ["Looks right"] },
+			intent_review: undefined,
+		});
+	});
+
+	it("leaves valid contract-only Round 0 and post-Round-0 review validation unchanged", () => {
+		const contractOnly = roundZeroPair();
+		Reflect.deleteProperty(contractOnly.questions[0].deepInterview, "intent_review");
+		expect(validateAsk(contractOnly).questions[0]).toMatchObject({
+			deepInterview: { intent_contract: expect.any(Object) },
+		});
+		const postRoundReview = roundZeroPair();
+		Reflect.deleteProperty(postRoundReview.questions[0].deepInterview, "intent_contract");
+		postRoundReview.questions[0].deepInterview.round = 1;
+		postRoundReview.questions[0].deepInterview.component = "locked-intent";
+		postRoundReview.questions[0].deepInterview.dimension = "constraints";
+		expect(validateAsk(postRoundReview).questions[0]).toMatchObject({
+			deepInterview: { intent_review: expect.any(Object) },
+		});
 	});
 });
