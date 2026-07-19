@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { VERSION } from "@gajae-code/utils/dirs";
 import { safeStderrWrite } from "@gajae-code/utils/safe-stderr";
 import type { Args } from "../cli/args";
+import { readLinuxProcStartTimeSync } from "./linux-proc";
 import { tmuxRuntimeSessionPath } from "./session-layout";
 import {
 	GJC_COORDINATOR_SESSION_BRANCH_ENV,
@@ -1108,11 +1109,7 @@ function defaultOwnerIsolationProbe(
 		let startTime: string | undefined;
 		let cgroupText: string | null = null;
 		try {
-			const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
-			startTime = stat
-				.slice(stat.lastIndexOf(")") + 2)
-				.trim()
-				.split(/\s+/)[19];
+			startTime = readLinuxProcStartTimeSync(pid) ?? undefined;
 			cgroupText = fs.readFileSync(`/proc/${pid}/cgroup`, "utf8");
 		} catch {}
 		if (!startTime) return { state: "unverifiable" };

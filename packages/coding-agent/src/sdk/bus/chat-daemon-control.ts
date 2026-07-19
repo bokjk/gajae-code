@@ -122,6 +122,7 @@ function defaultSignal(pid: number, signal: NodeJS.Signals): void {
 		process.kill(pid, signal);
 	} catch {}
 }
+
 function runtimeInfo(execPath?: string): DaemonRuntimeInfo {
 	const rt = resolveGjcRuntimeSpawnInfo(execPath ?? process.execPath);
 	return {

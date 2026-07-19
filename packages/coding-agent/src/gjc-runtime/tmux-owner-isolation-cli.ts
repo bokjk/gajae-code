@@ -1,5 +1,6 @@
 /** Internal JSON-line facade for the tmux owner-isolation contract. */
 import * as fs from "node:fs/promises";
+import { readLinuxProcStartTime } from "./linux-proc";
 import {
 	type BootstrapRequest,
 	bootstrapTmuxOwnerIsolation,
@@ -31,17 +32,7 @@ async function readCgroup(pid = "self"): Promise<string | null> {
 }
 
 async function readProcessStartTime(pid: number): Promise<string | null> {
-	try {
-		const stat = await fs.readFile(`/proc/${pid}/stat`, "utf8");
-		return (
-			stat
-				.slice(stat.lastIndexOf(")") + 2)
-				.trim()
-				.split(/\s+/)[19] ?? null
-		);
-	} catch {
-		return null;
-	}
+	return readLinuxProcStartTime(pid);
 }
 
 function isKnownNoServerDiagnostic(stderr: string): boolean {

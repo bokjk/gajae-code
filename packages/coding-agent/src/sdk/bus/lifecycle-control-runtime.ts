@@ -12,6 +12,7 @@ import * as fsPromises from "node:fs/promises";
 import * as path from "node:path";
 import type { NotificationControlServer as NativeNotificationControlServer } from "@gajae-code/natives";
 import { logger } from "@gajae-code/utils";
+import { readLinuxProcStartTime } from "../../gjc-runtime/linux-proc";
 import { tmuxRuntimeSessionPath } from "../../gjc-runtime/session-layout";
 import {
 	GJC_COORDINATOR_SESSION_ID_ENV,
@@ -425,15 +426,11 @@ function lifecycleOwnerIsolationProbe(tmux: string, env: NodeJS.ProcessEnv): Own
 					cgroup: { classification: "not_applicable" },
 					sessionNames,
 				};
-			const [cgroupText, stat] = await Promise.all([
+			const [cgroupText, startTime] = await Promise.all([
 				fsPromises.readFile(`/proc/${pid}/cgroup`, "utf8").catch(() => null),
-				fsPromises.readFile(`/proc/${pid}/stat`, "utf8").catch(() => null),
+				readLinuxProcStartTime(pid),
 			]);
 			const cgroup = classifyCgroup({ platform: process.platform, cgroupText });
-			const startTime = stat
-				?.slice(stat.lastIndexOf(")") + 2)
-				.trim()
-				.split(/\s+/)[19];
 			if (!startTime) return { state: "unverifiable", pid, cgroup, sessionNames };
 			return {
 				state:

@@ -11,6 +11,7 @@ import {
 	COORDINATOR_MCP_TOOL_NAMES,
 	type CoordinatorToolName,
 } from "../coordinator/contract";
+import { readLinuxProcStartTimeSync } from "../gjc-runtime/linux-proc";
 import type { WorkflowGate, WorkflowGateQueryRecord } from "../modes/shared/agent-wire/workflow-gate-types";
 import type { BrokerDiscovery } from "../sdk/broker/discovery";
 import { type EnsureBrokerSettings, ensureBroker } from "../sdk/broker/ensure";
@@ -1398,17 +1399,7 @@ interface SessionStateLockOwner {
 }
 
 function processStartTime(pid: number): string | null {
-	try {
-		const stat = nodeFs.readFileSync(`/proc/${pid}/stat`, "utf8");
-		const close = stat.lastIndexOf(")");
-		const fields = stat
-			.slice(close + 1)
-			.trim()
-			.split(/\s+/);
-		return fields[19] ?? null;
-	} catch {
-		return null;
-	}
+	return readLinuxProcStartTimeSync(pid);
 }
 
 function validLockOwner(value: unknown): value is SessionStateLockOwner {
