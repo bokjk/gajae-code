@@ -9,6 +9,7 @@ import { Args, type CliConfig, Command, type CommandEntry, Flags, run } from "@g
 import { APP_NAME, formatBunRuntimeError, MIN_BUN_VERSION, VERSION } from "@gajae-code/utils/dirs";
 import { runFixtureReport } from "./cli/fixture-report";
 import { isTmuxOwnerIsolationCliArgv, runTmuxOwnerIsolationCliFromStdin } from "./gjc-runtime/tmux-owner-isolation-cli";
+import { smokeTestTabWorker } from "./tools/browser/tab-worker-smoke";
 
 if (Bun.semver.order(Bun.version, MIN_BUN_VERSION) < 0) {
 	process.stderr.write(
@@ -252,16 +253,15 @@ function isSubcommand(first: string | undefined): boolean {
 }
 
 /**
- * Smoke-test entry. Spawns the stats sync worker, pings it, exits.
+ * Smoke-test entry. Spawns the stats sync worker and the browser tab worker, then verifies their protocol.
  *
- * Purpose: catch the silent worker-load regressions that hit compiled
- * binaries (issues #1011 and #1027). Neither `--version` nor
- * `stats --summary` actually spawns a Worker on a fresh install — the
- * sync path early-returns when no session files exist. This probe is the
- * minimal end-to-end test that proves `new Worker(...)` resolves and the
- * bundled worker module evaluates successfully. Wired into
- * `scripts/install-tests/run-ci.sh` so binary / source-link / tarball
- * installs all exercise it on every CI run.
+ * Purpose: catch silent compiled-worker load regressions (issues #1011,
+ * #1027, and #2598). Neither `--version` nor `stats --summary` spawns both
+ * worker entries on a fresh install. This probe proves each bundled worker
+ * module resolves and evaluates; the tab-worker probe also completes its
+ * bootstrap/closed protocol without launching a browser. Wired into
+ * `scripts/install-tests/run-ci.sh` so binary / source-link / tarball installs
+ * exercise it on every CI run.
  */
 async function runSmokeTest(): Promise<void> {
 	const { smokeTestSyncWorker } = await import("@gajae-code/stats");
@@ -278,6 +278,7 @@ async function runSmokeTest(): Promise<void> {
 	if (typeof h02ScoreSequenceFuzzy !== "function" || typeof h01FindBestFuzzyMatch !== "function") {
 		throw new Error("smoke-test: native fuzzy exports missing from embedded addon");
 	}
+	await smokeTestTabWorker();
 	process.stdout.write("smoke-test: ok\n");
 }
 
