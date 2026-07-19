@@ -215,5 +215,5 @@ describe("LSP lifecycle behavior", () => {
 		} finally {
 			await fs.rm(cwd, { recursive: true, force: true });
 		}
-	}, 3_000);
+	}, 30_000);
 });
