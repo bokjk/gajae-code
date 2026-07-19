@@ -117,6 +117,17 @@ describe("GJC public CLI command surface", () => {
 		expect(combined).not.toContain("What's New");
 		expect(combined).not.toContain("chatContainer");
 	}, 30_000);
+	it("documents the session-index repair flag in gc help", () => {
+		const result = Bun.spawnSync(["bun", cliEntry, "gc", "--help"], {
+			cwd: repoRoot,
+			stderr: "pipe",
+			stdout: "pipe",
+		});
+		const output = `${result.stdout.toString()}\n${result.stderr.toString()}`;
+		expect(result.exitCode, output).toBe(0);
+		expect(output).toContain("--repair-session-index");
+		expect(output).toContain("Quarantine a corrupt session-index suffix");
+	}, 30_000);
 
 	it("documents the native CLI surface in command help", async () => {
 		for (const command of ["ralplan", "deep-interview", "state"]) {
