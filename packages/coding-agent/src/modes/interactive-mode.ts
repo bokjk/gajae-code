@@ -62,6 +62,7 @@ import {
 } from "./components/pet-capability";
 import type { ToolExecutionHandle } from "./components/tool-execution";
 import { StatusLineComponent } from "./components/tool-status-header";
+import { composeToolText } from "./components/tool-transcript-format";
 import {
 	WelcomeComponent,
 	type WelcomeLogoMode,
@@ -1817,17 +1818,27 @@ export class InteractiveMode implements InteractiveModeContext {
 						result?.content
 							.filter(part => part.type === "text")
 							.map(part => part.text)
-							.join("\n") ?? "";
+							.join("\n")
+							.trim() ?? "";
 					items.push({
 						kind: "tool",
 						source: { toolCallId: content.id, content, result },
 						getPayload: () => ({
-							text: resultText || JSON.stringify(content.arguments, null, 2),
+							text: composeToolText({
+								name: content.name,
+								args: content.arguments,
+								intent: content.intent,
+								resultText,
+								isError: result?.isError ?? false,
+								hasResult: toolResults.has(content.id),
+							}),
 							metadata: {
 								name: content.name,
 								arguments: content.arguments,
 								intent: content.intent,
 								isError: result?.isError ?? false,
+								resultText,
+								hasResult: toolResults.has(content.id),
 							},
 							source: { content, result },
 						}),

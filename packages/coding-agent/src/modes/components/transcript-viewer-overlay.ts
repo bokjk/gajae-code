@@ -11,6 +11,7 @@ import { sanitizeText } from "@gajae-code/utils";
 import { getMarkdownTheme, theme } from "../theme/theme";
 import type { TranscriptItemRegistry, TranscriptSourcePayload } from "../transcript-item-registry";
 import { DynamicBorder } from "./dynamic-border";
+import { toolDisplayText } from "./tool-transcript-format";
 
 const INDENT = "    ";
 const PAGE_SIZE = 15;
@@ -363,6 +364,29 @@ export class TranscriptViewerOverlay extends Container {
 	}
 }
 
+type ToolTranscriptMetadata = {
+	name: string;
+	arguments: Record<string, unknown>;
+	intent?: unknown;
+	resultText: string;
+	isError: boolean;
+	hasResult: boolean;
+};
+
+function hasToolTranscriptMetadata(
+	metadata: Readonly<Record<string, unknown>>,
+): metadata is Readonly<ToolTranscriptMetadata> {
+	return (
+		typeof metadata.name === "string" &&
+		metadata.arguments !== null &&
+		typeof metadata.arguments === "object" &&
+		!Array.isArray(metadata.arguments) &&
+		typeof metadata.resultText === "string" &&
+		typeof metadata.isError === "boolean" &&
+		typeof metadata.hasResult === "boolean"
+	);
+}
+
 /** Main-session adapter over the registry's canonical payload resolver. */
 export function transcriptViewerEntries(registry: TranscriptItemRegistry): TranscriptViewerEntry[] {
 	return registry.items().flatMap(item => {
@@ -375,10 +399,26 @@ export function transcriptViewerEntries(registry: TranscriptItemRegistry): Trans
 				: item.kind === "assistant-thinking"
 					? "Thinking"
 					: item.kind === "tool"
-						? "Tool"
+						? String(payload.metadata.name ?? "Tool")
 						: item.kind === "user"
 							? "User"
 							: item.kind;
-		return [{ id: item.id, kind: item.kind, label, payload, ...capabilities }];
+		const toolMetadata = hasToolTranscriptMetadata(payload.metadata) ? payload.metadata : undefined;
+		const getDisplayText =
+			item.kind === "tool" && toolMetadata
+				? (expanded: boolean) =>
+						toolDisplayText(
+							{
+								name: toolMetadata.name,
+								args: toolMetadata.arguments,
+								intent: typeof toolMetadata.intent === "string" ? toolMetadata.intent : undefined,
+								resultText: toolMetadata.resultText,
+								isError: toolMetadata.isError,
+								hasResult: toolMetadata.hasResult,
+							},
+							expanded,
+						)
+				: undefined;
+		return [{ id: item.id, kind: item.kind, label, payload, ...capabilities, getDisplayText }];
 	});
 }
