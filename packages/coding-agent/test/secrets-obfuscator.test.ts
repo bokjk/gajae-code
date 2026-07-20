@@ -2,7 +2,11 @@
  * Tests for secrets regex parsing, compilation, and obfuscation.
  */
 
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, spyOn, test } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import { loadSecrets } from "../src/secrets";
 import { deobfuscateSessionContext, SecretObfuscator } from "../src/secrets/obfuscator";
 import { compileSecretRegex } from "../src/secrets/regex";
 import {
@@ -32,6 +36,12 @@ describe("compileSecretRegex", () => {
 	it("rejects invalid regex flags", () => {
 		expect(() => compileSecretRegex("x", "zz")).toThrow();
 	});
+
+	it("preserves safe quantified alternation and regex literal flags", () => {
+		const regex = compileSecretRegex("/(?:api|token)-[a-z]+/i", "m");
+		expect(regex.source).toBe("(?:api|token)-[a-z]+");
+		expect(regex.flags).toBe("gim");
+	});
 });
 
 describe("SecretObfuscator regex behavior", () => {
@@ -50,6 +60,11 @@ describe("SecretObfuscator regex behavior", () => {
 		expect(obfuscated).not.toEqual(text);
 		expect(obfuscator.deobfuscate(obfuscated)).toEqual(text);
 	});
+
+	it("preserves zero-length regex handling", () => {
+		const obfuscator = new SecretObfuscator([{ type: "regex", content: "(?=token)" }]);
+		expect(obfuscator.obfuscate("token token")).toBe("token token");
+	});
 	it("deobfuscates placeholders through object payloads", () => {
 		const obfuscator = new SecretObfuscator([{ type: "regex", content: "api[_-]?key\\s*=\\s*\\w+", flags: "i" }]);
 		const original = {
@@ -64,6 +79,118 @@ describe("SecretObfuscator regex behavior", () => {
 			cmd: original.cmd,
 			status: original.status,
 		});
+	});
+});
+
+describe("loadSecrets regex provenance", () => {
+	it("accepts global regexes while ignoring project regexes without dropping project plain entries", async () => {
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), "gjc-secrets-provenance-"));
+		const cwd = path.join(root, "project");
+		const agentDir = path.join(root, "agent");
+		try {
+			await fs.mkdir(path.join(cwd, ".gjc"), { recursive: true });
+			await fs.mkdir(agentDir, { recursive: true });
+			await Bun.write(
+				path.join(agentDir, "secrets.yml"),
+				[
+					'- type: regex\n  content: "token-[a-z]+"',
+					'- type: regex\n  content: "shared-[a-z]+"\n  mode: replace\n  replacement: GLOBAL',
+				].join("\n"),
+			);
+			await Bun.write(
+				path.join(cwd, ".gjc", "secrets.yml"),
+				[
+					"- type: plain\n  content: project-secret",
+					'- type: plain\n  content: "shared-[a-z]+"',
+					'- type: regex\n  content: "project-[a-z]+"',
+					'- type: regex\n  content: "shared-[a-z]+"\n  mode: replace\n  replacement: PROJECT',
+				].join("\n"),
+			);
+
+			const entries = await loadSecrets(cwd, agentDir);
+			expect(entries).toContainEqual({
+				type: "plain",
+				content: "project-secret",
+				mode: "obfuscate",
+				replacement: undefined,
+				flags: undefined,
+			});
+			expect(entries).not.toContainEqual(expect.objectContaining({ content: "project-[a-z]+" }));
+			expect(entries).toContainEqual(expect.objectContaining({ content: "token-[a-z]+" }));
+			expect(entries).toContainEqual(expect.objectContaining({ content: "shared-[a-z]+", replacement: "GLOBAL" }));
+			expect(entries).toContainEqual(expect.objectContaining({ type: "plain", content: "shared-[a-z]+" }));
+			expect(entries).not.toContainEqual(expect.objectContaining({ replacement: "PROJECT" }));
+
+			const obfuscator = new SecretObfuscator(entries);
+			const obfuscated = obfuscator.obfuscate("project-secret token-alpha project-alpha shared-beta");
+			expect(obfuscated).not.toContain("project-secret");
+			expect(obfuscated).not.toContain("token-alpha");
+			expect(obfuscated).toContain("project-alpha");
+			expect(obfuscated).toContain("GLOBAL");
+		} finally {
+			await fs.rm(root, { recursive: true, force: true });
+		}
+	});
+
+	it("treats an agent directory inside the project as project scope", async () => {
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), "gjc-secrets-contained-agent-"));
+		const cwd = path.join(root, "project");
+		const agentDir = path.join(cwd, "caller-agent");
+		try {
+			await fs.mkdir(path.join(cwd, ".gjc"), { recursive: true });
+			await fs.mkdir(agentDir, { recursive: true });
+			await Bun.write(path.join(agentDir, "secrets.yml"), '- type: regex\n  content: "contained-[a-z]+"');
+
+			const entries = await loadSecrets(cwd, agentDir);
+			expect(entries).not.toContainEqual(expect.objectContaining({ type: "regex" }));
+			expect(new SecretObfuscator(entries).obfuscate("contained-secret")).toBe("contained-secret");
+		} finally {
+			await fs.rm(root, { recursive: true, force: true });
+		}
+	});
+
+	it("fails closed when agent directory canonicalization is unavailable", async () => {
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), "gjc-secrets-canonical-failure-"));
+		const cwd = path.join(root, "project");
+		const agentDir = path.join(root, "agent");
+		try {
+			await fs.mkdir(path.join(cwd, ".gjc"), { recursive: true });
+			await fs.mkdir(agentDir, { recursive: true });
+			await Bun.write(path.join(agentDir, "secrets.yml"), '- type: regex\n  content: "uncertain-[a-z]+"');
+			const realpathSpy = spyOn(fs, "realpath").mockRejectedValue(new Error("canonicalization unavailable"));
+			try {
+				const entries = await loadSecrets(cwd, agentDir);
+				expect(entries).not.toContainEqual(expect.objectContaining({ type: "regex" }));
+				expect(new SecretObfuscator(entries).obfuscate("uncertain-secret")).toBe("uncertain-secret");
+			} finally {
+				realpathSpy.mockRestore();
+			}
+		} finally {
+			await fs.rm(root, { recursive: true, force: true });
+		}
+	});
+
+	test.skipIf(process.platform === "win32")("classifies agent directory symlink aliases fail closed", async () => {
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), "gjc-secrets-agent-alias-"));
+		const cwd = path.join(root, "project");
+		const outsideAgentDir = path.join(root, "outside-agent");
+		const insideAgentDir = path.join(cwd, "inside-agent");
+		const lexicalInsideAlias = path.join(cwd, "outside-alias");
+		const canonicalInsideAlias = path.join(root, "inside-alias");
+		try {
+			await fs.mkdir(path.join(cwd, ".gjc"), { recursive: true });
+			await fs.mkdir(outsideAgentDir, { recursive: true });
+			await fs.mkdir(insideAgentDir, { recursive: true });
+			await Bun.write(path.join(outsideAgentDir, "secrets.yml"), '- type: regex\n  content: "outside-[a-z]+"');
+			await Bun.write(path.join(insideAgentDir, "secrets.yml"), '- type: regex\n  content: "inside-[a-z]+"');
+			await fs.symlink(outsideAgentDir, lexicalInsideAlias, "dir");
+			await fs.symlink(insideAgentDir, canonicalInsideAlias, "dir");
+
+			expect(await loadSecrets(cwd, lexicalInsideAlias)).toEqual([]);
+			expect(await loadSecrets(cwd, canonicalInsideAlias)).toEqual([]);
+		} finally {
+			await fs.rm(root, { recursive: true, force: true });
+		}
 	});
 });
 
