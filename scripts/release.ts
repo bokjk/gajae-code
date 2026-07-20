@@ -594,6 +594,16 @@ async function cmdRelease(version: string): Promise<void> {
 	await $`bun --cwd=packages/natives run build`;
 	console.log();
 
+	// 4d. Regenerate the telegram-daemon-generation-guard manifest. The freshly
+	// rebuilt native addon rewrites `packages/natives/native/index.d.ts` with the
+	// bumped `__piNativesV…` version sentinel, and that file is one of the guard's
+	// native-authority digest sources. Without regenerating the manifest here the
+	// version bump alone makes `check:sdk-closure` fail on the release tree. This
+	// only re-records digests of the already-bumped, reviewed tree; the protected
+	// daemon declaration digests are unchanged by a version bump.
+	console.log("Regenerating telegram-daemon-generation-guard manifest…");
+	await $`bun scripts/telegram-daemon-generation-guard.ts --write-manifest`;
+
 	// 5. Update changelogs
 	console.log("Updating CHANGELOGs...");
 	await updateChangelogsForRelease(version);
