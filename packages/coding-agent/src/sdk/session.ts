@@ -107,10 +107,11 @@ import { NotificationSessionController } from "../sdk/bus/session-control";
 import { shouldHostSdk } from "../sdk/host";
 import {
 	collectEnvSecrets,
+	createSecretObfuscator,
 	deobfuscateSessionContext,
 	loadSecrets,
 	obfuscateMessages,
-	SecretObfuscator,
+	type SecretObfuscator,
 } from "../secrets";
 import { AgentSession, type ForkContextSeed } from "../session/agent-session";
 import { resolveAuthBrokerConfig } from "../session/auth-broker-config";
@@ -1221,7 +1222,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			const envEntries = collectEnvSecrets();
 			const allEntries = [...envEntries, ...fileEntries];
 			if (allEntries.length > 0) {
-				obfuscator = new SecretObfuscator(allEntries);
+				obfuscator = createSecretObfuscator(allEntries);
 			}
 		}
 		const secretsEnabled = obfuscator?.hasSecrets() === true;

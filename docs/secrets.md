@@ -1,6 +1,6 @@
 # Secret Obfuscation
 
-Prevents sensitive values (API keys, tokens, passwords) from being sent to LLM providers. When enabled, secrets are replaced with deterministic placeholders before leaving the process, and restored in tool call arguments returned by the model.
+Prevents sensitive values (API keys, tokens, passwords) from being sent to LLM providers. When enabled, secrets are replaced with authenticated placeholders before leaving the process, and restored in tool call arguments returned by the model.
 
 ## Enabling
 
@@ -17,16 +17,20 @@ secrets:
    - **Environment variables** whose names match common secret patterns (`KEY`, `SECRET`, `TOKEN`, `PASSWORD`, `PASS`, `AUTH`, `CREDENTIAL`, `PRIVATE`, `OAUTH`) with values >= 8 characters
    - **`secrets.yml` files** (see below)
 
-2. Outbound text messages to the LLM have secret values replaced with deterministic placeholders like `#AB12#`.
+2. Outbound text messages to the LLM have secret values replaced with authenticated, versioned placeholders like `#GJC1_…#`.
 
 3. Session context/tool arguments returned from the model are deep-walked and obfuscation placeholders are restored to original values before display or execution.
 
 Two modes control what happens to each secret:
 
-| Mode                  | Behavior                                                | Reversible                                      |
-| --------------------- | ------------------------------------------------------- | ----------------------------------------------- |
-| `obfuscate` (default) | Replaced with deterministic placeholder `#[A-Z0-9]{4}#` | Yes (deobfuscated in tool args/session context) |
-| `replace`             | Replaced with deterministic same-length string          | No (one-way)                                    |
+| Mode                  | Behavior                                        | Reversible                                      |
+| --------------------- | ----------------------------------------------- | ----------------------------------------------- |
+| `obfuscate` (default) | Replaced with authenticated `#GJC1_…#` token    | Yes (deobfuscated in tool args/session context) |
+| `replace`             | Replaced with deterministic same-length string | No (one-way)                                    |
+
+Authenticated placeholders use a process-local key. Plain-secret tokens remain stable across sessions, reloads, and forks within the running process; after a process restart, earlier tokens intentionally remain opaque.
+
+Regex-discovered tokens are reversible only by the originating obfuscator instance. A fresh obfuscator in the same process or after restart keeps them opaque because regex matches are not reconstructed from persisted placeholders.
 
 ## secrets.yml
 

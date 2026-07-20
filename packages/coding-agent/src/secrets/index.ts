@@ -1,10 +1,17 @@
+import { randomBytes } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { isEnoent, logger, pathIsWithin } from "@gajae-code/utils";
 import { YAML } from "bun";
-import type { SecretEntry } from "./obfuscator";
+import { type SecretEntry, SecretObfuscator } from "./obfuscator";
 import { compileSecretRegex } from "./regex";
 
+const PROCESS_SECRET_OBFUSCATION_KEY = randomBytes(32);
+
+/** Create an obfuscator using the process-local authenticated-placeholder key. */
+export function createSecretObfuscator(entries: SecretEntry[]): SecretObfuscator {
+	return new SecretObfuscator(entries, PROCESS_SECRET_OBFUSCATION_KEY);
+}
 export { deobfuscateSessionContext, obfuscateMessages, type SecretEntry, SecretObfuscator } from "./obfuscator";
 
 type SecretsFileScope = "global" | "project";

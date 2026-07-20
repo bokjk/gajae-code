@@ -94,7 +94,7 @@ Discoverable capabilities include browser automation, scheduling, debugging, and
 
 {{#if secretsEnabled}}
 <redacted-content>
-Some tool output values are intentionally redacted as `#XXXX#` tokens. Treat them as opaque sensitive strings.
+Some tool output values are intentionally redacted as versioned `#GJC1_…#` tokens. Treat them as opaque sensitive strings.
 </redacted-content>
 {{/if}}
 

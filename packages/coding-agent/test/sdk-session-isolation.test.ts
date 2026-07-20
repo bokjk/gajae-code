@@ -9,7 +9,7 @@ import type { ExtensionFactory } from "@gajae-code/coding-agent/extensibility/ex
 import { LocalProtocolHandler, resolveLocalUrlToPath } from "@gajae-code/coding-agent/internal-urls";
 import { AgentRegistry } from "@gajae-code/coding-agent/registry/agent-registry";
 import { createAgentSession } from "@gajae-code/coding-agent/sdk";
-import { SecretObfuscator } from "@gajae-code/coding-agent/secrets";
+import { createSecretObfuscator } from "@gajae-code/coding-agent/secrets";
 import type { AgentSession } from "@gajae-code/coding-agent/session/agent-session";
 import { SessionManager } from "@gajae-code/coding-agent/session/session-manager";
 import { getSessionsDir, Snowflake } from "@gajae-code/utils";
@@ -33,7 +33,6 @@ function createTtsrRule(name: string): Rule {
 }
 
 const SECRET_ENV_PATTERNS = /(?:KEY|SECRET|TOKEN|PASSWORD|PASS|AUTH|CREDENTIAL|PRIVATE|OAUTH)(?:_|$)/i;
-
 async function withClearedSecretEnv<T>(run: () => Promise<T>): Promise<T> {
 	const removed: Array<[string, string]> = [];
 	for (const [name, value] of Object.entries(process.env)) {
@@ -278,7 +277,7 @@ describe("createAgentSession session storage isolation", () => {
 	});
 	it("shows redaction guidance only when secrets are actually loaded", async () => {
 		await withClearedSecretEnv(async () => {
-			const redactionGuidance = "redacted as `#XXXX#` tokens";
+			const redactionGuidance = "redacted as versioned `#GJC1_…#` tokens";
 			const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), `pi-sdk-secrets-${Snowflake.next()}-`));
 			tempDirs.push(tempDir);
 			const cwd = path.join(tempDir, "project");
@@ -329,7 +328,7 @@ describe("createAgentSession session storage isolation", () => {
 			const model = getBundledModel("anthropic", "claude-sonnet-4-5");
 			if (!model) throw new Error("Expected anthropic model");
 
-			const obfuscator = new SecretObfuscator([{ type: "plain", content: "sdk-secret-token-123456" }]);
+			const obfuscator = createSecretObfuscator([{ type: "plain", content: "sdk-secret-token-123456" }]);
 			const initialManager = SessionManager.create(cwd, path.join(agentDir, "sessions"));
 			initialManager.appendMessage({
 				role: "assistant",
@@ -352,6 +351,8 @@ describe("createAgentSession session storage isolation", () => {
 			const sessionFile = initialManager.getSessionFile();
 			if (!sessionFile) throw new Error("Expected persisted session file");
 			await initialManager.close();
+			const transcript = fs.readFileSync(sessionFile, "utf8");
+			expect(transcript).not.toContain("sdk-secret-token-123456");
 
 			const resumedManager = await SessionManager.open(sessionFile, path.dirname(sessionFile));
 			const { session } = await createAgentSession({
