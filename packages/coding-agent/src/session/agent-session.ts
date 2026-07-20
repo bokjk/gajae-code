@@ -12583,11 +12583,23 @@ export class AgentSession {
 			this.settings.has("retry.maxRetries") ||
 			this.settings.has("retry.baseDelayMs") ||
 			this.settings.has("retry.maxDelayMs");
-		// A bare default retry configuration must preserve the historical
-		// fail-closed behavior for generic provider errors. Explicit retry
-		// settings opt into the resilient legacy retry path.
-		if (!managedFallback && (!retrySettings.enabled || !legacyRetryConfigured)) return false;
+		// retry.enabled=false always surfaces immediately, matching the explicit
+		// user opt-out.
+		if (!managedFallback && !retrySettings.enabled) return false;
 		const classification = managedFallback ? undefined : this.#classifyErrorForRetry(message);
+		// A bare default retry configuration (no explicit retry.* keys) preserves the
+		// historical fail-closed behavior for generic provider errors. Clearly-transient
+		// failures — including provider stream first-event and idle timeouts — must still
+		// retry under the default config instead of failing the turn and leaving the
+		// agent idle.
+		if (
+			!managedFallback &&
+			!legacyRetryConfigured &&
+			classification !== "transient" &&
+			classification !== "first_event_timeout"
+		) {
+			return false;
+		}
 		const legacyUnbounded = classification === "transient";
 		const attemptsUsed = managedFallback ? controller.attemptsUsed || 1 : this.#retryAttempt + 1;
 		const failedSelector = managedFallback ? controller.currentSelector() : undefined;

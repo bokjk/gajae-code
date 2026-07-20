@@ -173,6 +173,31 @@ describe("AgentSession resilient retry", () => {
 		settings.setModelRole("default", `${model.provider}/${model.id}`);
 		return new AgentSession({ agent, sessionManager: SessionManager.inMemory(), settings, modelRegistry });
 	}
+	// Builds a single-model session with a BARE default retry configuration:
+	// no explicit retry.* keys are set, so `legacyRetryConfigured` is false.
+	// This mirrors the real-world default and guards the regression where
+	// provider stream timeouts silently failed without retrying (agent idle).
+	function buildBareRetrySession(options: {
+		responses: Array<{ throw: string } | { content: string[] }>;
+		requestedModels?: string[];
+	}): AgentSession {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
+		if (!model) throw new Error("Expected bundled Anthropic test model to exist");
+		const mock = createMockModel({ responses: options.responses });
+		const requestedModels = options.requestedModels ?? [];
+		const agent = new Agent({
+			getApiKey: provider => `${provider}-test-key`,
+			initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] },
+			streamFn: (requestedModel, context, opts) => {
+				requestedModels.push(`${requestedModel.provider}/${requestedModel.id}`);
+				return mock.stream(requestedModel, context, opts);
+			},
+		});
+		// Only compaction is disabled; no retry.* keys are seeded.
+		const settings = Settings.isolated({ "compaction.enabled": false });
+		settings.setModelRole("default", `${model.provider}/${model.id}`);
+		return new AgentSession({ agent, sessionManager: SessionManager.inMemory(), settings, modelRegistry });
+	}
 	function track(s: AgentSession) {
 		const retryStartEvents: AutoRetryStartEvent[] = [];
 		const retryEndEvents: AutoRetryEndEvent[] = [];
@@ -682,5 +707,71 @@ describe("AgentSession resilient retry", () => {
 		expect(retryEndEvents).toHaveLength(1);
 		expect(retryEndEvents[0]).toMatchObject({ success: true });
 		expect(lastAssistant(session).stopReason).toBe("stop");
+	});
+	it("retries provider stream first-event timeouts under a bare default config (single model)", async () => {
+		// Regression: with a single default model and NO explicit retry.* keys,
+		// a provider stream timeout used to fail the turn without retrying and
+		// leave the agent idle. Clearly-transient stream timeouts must retry even
+		// under the default configuration.
+		const requestedModels: string[] = [];
+		session = buildBareRetrySession({
+			responses: [
+				{ throw: "Anthropic stream timed out while waiting for the first event" },
+				{ content: ["recovered"] },
+			],
+			requestedModels,
+		});
+		vi.spyOn(scheduler, "wait").mockResolvedValue(undefined);
+		const { retryStartEvents, retryEndEvents } = track(session);
+
+		await session.prompt("bare-config first-event timeout");
+		await session.waitForIdle();
+
+		expect(retryStartEvents).toHaveLength(1);
+		expect(requestedModels).toHaveLength(2);
+		expect(retryEndEvents).toHaveLength(1);
+		expect(retryEndEvents[0]).toMatchObject({ success: true });
+		expect(lastAssistant(session).stopReason).toBe("stop");
+	});
+
+	it("retries provider stream idle stalls under a bare default config (single model)", async () => {
+		const requestedModels: string[] = [];
+		session = buildBareRetrySession({
+			responses: [
+				{ throw: "Anthropic stream stalled while waiting for the next event" },
+				{ content: ["recovered"] },
+			],
+			requestedModels,
+		});
+		vi.spyOn(scheduler, "wait").mockResolvedValue(undefined);
+		const { retryStartEvents, retryEndEvents } = track(session);
+
+		await session.prompt("bare-config idle stall");
+		await session.waitForIdle();
+
+		expect(retryStartEvents).toHaveLength(1);
+		expect(requestedModels).toHaveLength(2);
+		expect(retryEndEvents[0]).toMatchObject({ success: true });
+		expect(lastAssistant(session).stopReason).toBe("stop");
+	});
+
+	it("still fails closed on generic unknown errors under a bare default config", async () => {
+		// The fix is scoped to clearly-transient failures. Generic unknown
+		// provider errors preserve the historical fail-closed behavior when no
+		// explicit retry.* settings opt into the resilient legacy retry path.
+		const requestedModels: string[] = [];
+		session = buildBareRetrySession({
+			responses: [{ throw: "some unexpected provider explosion" }, { content: ["should-not-reach"] }],
+			requestedModels,
+		});
+		vi.spyOn(scheduler, "wait").mockResolvedValue(undefined);
+		const { retryStartEvents } = track(session);
+
+		await session.prompt("bare-config unknown error");
+		await session.waitForIdle();
+
+		expect(retryStartEvents).toHaveLength(0);
+		expect(requestedModels).toHaveLength(1);
+		expect(lastAssistant(session).stopReason).toBe("error");
 	});
 });
