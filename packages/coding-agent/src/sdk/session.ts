@@ -982,6 +982,7 @@ const MCP_TOOLS_ONLY_MANAGER_SUBSESSION_ERROR = "tools-only MCP managers cannot 
 const MCP_CONFIG_PATH_SUBSESSION_ERROR = "mcpConfigPath cannot be used in sub-sessions";
 const MAX_EXACT_MCP_TOOL_COLLISION_NAMES = 10;
 const MAX_EXACT_MCP_TOOL_NAME_LENGTH = 100;
+const pluginMcpManagerServers = new WeakMap<MCPManager, ReadonlySet<string>>();
 
 class ExactMcpToolNameCollisionError extends Error {
 	constructor(toolNames: Iterable<string>) {
@@ -1616,6 +1617,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		const explicitMcpConfigPath = !isCanonicalSubSession && !options.mcpManager ? options.mcpConfigPath : undefined;
 		const customTools: CustomTool[] = [];
 		const exactMcpToolNames: string[] = [];
+		const pluginMcpToolNames: string[] = [];
 
 		// Add image tools when the active model or configured image providers can generate images.
 		const imageGenTools = await logger.time("getImageGenTools", () => getImageGenTools(modelRegistry, model));
@@ -1727,6 +1729,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 							mcpManager = owned;
 							ownsMcpManager = true;
 							customTools.push(...(result.tools as CustomTool[]));
+							pluginMcpManagerServers.set(owned, new Set(result.connectedServers));
+							owned.sealConnectionSet();
+							pluginMcpToolNames.push(...result.tools.map(tool => tool.name));
 						} else {
 							await owned.disconnectAll().catch(() => {});
 						}
@@ -1747,10 +1752,15 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			// product decision holds for subagent sessions too.
 			const singleton = MCPManager.instance();
 			const inherited = mcpManager ?? (singleton?.isToolsOnly() ? undefined : singleton);
-			if (inherited) {
+			const pluginServers = inherited ? pluginMcpManagerServers.get(inherited) : undefined;
+			if (inherited && pluginServers) {
 				try {
-					const inheritedTools = inherited.getTools();
+					const inheritedTools = inherited.getTools().filter(tool => {
+						const serverName = tool.mcpServerName;
+						return serverName !== undefined && pluginServers.has(serverName);
+					});
 					if (inheritedTools.length > 0) customTools.push(...(inheritedTools as CustomTool[]));
+					pluginMcpToolNames.push(...inheritedTools.map(tool => tool.name));
 				} catch (error) {
 					logger.warn("Failed to inherit plugin MCP tools in subagent", { error });
 				}
@@ -2231,11 +2241,21 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				}
 			}
 		}
+		const mandatoryMCPToolNameSet = new Set(pluginMcpToolNames);
+		const selectableExplicitMCPToolNames = explicitlyRequestedMCPToolNames.filter(
+			name => !mandatoryMCPToolNameSet.has(name),
+		);
 		let initialToolNames = [...initialRequestedActiveToolNames];
 		if (mcpDiscoveryEnabled) {
-			const restoredSelectedMCPToolNames = existingSession.selectedMCPToolNames.filter(name =>
-				toolRegistry.has(name),
+			const restoredSelectedMCPToolNames = existingSession.selectedMCPToolNames.filter(
+				name => toolRegistry.has(name) && !mandatoryMCPToolNameSet.has(name),
 			);
+			if (
+				existingSession.hasPersistedMCPToolSelection &&
+				restoredSelectedMCPToolNames.length !== existingSession.selectedMCPToolNames.length
+			) {
+				sessionManager.appendMCPToolSelection(restoredSelectedMCPToolNames);
+			}
 			defaultSelectedMCPToolNames = [
 				...new Set([
 					...discoveryDefaultServerToolNames,
@@ -2243,11 +2263,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				]),
 			];
 			hasExplicitMCPToolSelection =
-				hasExplicitToolNames && (options.toolNames!.length === 0 || explicitlyRequestedMCPToolNames.length > 0);
+				hasExplicitToolNames && (options.toolNames!.length === 0 || selectableExplicitMCPToolNames.length > 0);
 			initialSelectedMCPToolNames = existingSession.hasPersistedMCPToolSelection
 				? restoredSelectedMCPToolNames
 				: hasExplicitMCPToolSelection
-					? explicitlyRequestedMCPToolNames
+					? selectableExplicitMCPToolNames
 					: defaultSelectedMCPToolNames;
 			initialToolNames = [
 				...new Set([
@@ -2257,13 +2277,17 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			];
 		}
 
-		// Custom tools and extension-registered tools are always included regardless of toolNames filter
+		// Custom, extension-registered, and plugin-bundle MCP tools are always
+		// included regardless of the caller's built-in tool filter. Plugin MCPs
+		// remain always-on even when generic MCP discovery is disabled.
 		const alwaysInclude: string[] = [
 			...(options.customTools?.map(t => (isCustomTool(t) ? t.name : t.name)) ?? []),
 			...registeredTools.filter(t => !t.definition.defaultInactive).map(t => t.definition.name),
+			...pluginMcpToolNames,
 		];
+		const pluginMcpToolNameSet = new Set(pluginMcpToolNames);
 		for (const name of alwaysInclude) {
-			if (mcpDiscoveryEnabled && discoverableMCPToolNames.has(name)) {
+			if (mcpDiscoveryEnabled && discoverableMCPToolNames.has(name) && !pluginMcpToolNameSet.has(name)) {
 				continue;
 			}
 			if (toolRegistry.has(name) && !initialToolNames.includes(name)) {
@@ -2614,9 +2638,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			initialSelectedDiscoveredBuiltinToolNames,
 			initialBaselineDiscoveredBuiltinToolNames,
 			defaultSelectedMCPToolNames,
+			mandatoryMCPToolNames: pluginMcpToolNames,
 			persistInitialMCPToolSelection: !hasExistingSession && hasExplicitMCPToolSelection,
 			persistInitialDiscoveredBuiltinToolSelection: !hasExistingSession && hasExplicitDiscoveredBuiltinToolSelection,
-			initialPersistedMCPToolNames: explicitlyRequestedMCPToolNames,
+			initialPersistedMCPToolNames: selectableExplicitMCPToolNames,
 			initialPersistedDiscoveredBuiltinToolNames: explicitlyRequestedDiscoveredBuiltinToolNames,
 			defaultSelectedMCPServerNames: settings.get("mcp.discoveryDefaultServers") ?? [],
 			ttsrManager,

@@ -126,6 +126,14 @@ async function bootSession(
 	const agentDir = path.join(cwd, ".gjc", "agent");
 	const cleanup = await createNotificationFixtureRoot(cwd, agentDir);
 	cleanupRoots.push(cleanup);
+	const botToken = settingsOverrides["notifications.telegram.botToken"];
+	const chatId = settingsOverrides["notifications.telegram.chatId"];
+	if (typeof botToken === "string" && typeof chatId === "string") {
+		fs.writeFileSync(
+			path.join(agentDir, "config.yml"),
+			`notifications:\n  enabled: true\n  telegram:\n    botToken: ${JSON.stringify(botToken)}\n    chatId: ${JSON.stringify(chatId)}\n`,
+		);
+	}
 	const settings = isolatedNotificationSettings(agentDir, settingsOverrides);
 	const controller = new NotificationSessionController({
 		eligible: true,

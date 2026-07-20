@@ -175,6 +175,8 @@ describe("daemon runtime detection", () => {
 		expect(source.mode).toBe("source");
 		expect(source.reloadPicksUpSourceEdits).toBe(true);
 		expect(source.warning).toBeUndefined();
+		expect(source.argsPrefix).toHaveLength(1);
+		expect(source.argsPrefix[0]).toEndWith(path.join("packages", "coding-agent", "bin", "gjc.js"));
 
 		const compiled = resolveGjcRuntimeSpawnInfo("/opt/gjc/gjc");
 		expect(compiled.mode).toBe("compiled");

@@ -53,11 +53,16 @@ async function runSupervisor(
 	return { exitCode, stdout, stderr };
 }
 
+function fastSigabrtCommand(): string[] {
+	if (process.platform !== "win32") return ["/bin/sh", "-c", "kill -ABRT $$"];
+	return [process.execPath, "-e", "process.kill(process.pid, 'SIGABRT')"];
+}
+
 describe("managed owner supervisor", () => {
 	it("records one exact durable SIGABRT receipt and exits with the abort status", async () => {
 		const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "gjc-managed-owner-"));
 		try {
-			const result = await runSupervisor(stateDir, [process.execPath, "-e", "process.kill(process.pid, 'SIGABRT')"]);
+			const result = await runSupervisor(stateDir, fastSigabrtCommand());
 			expect(result.exitCode).toBe(134);
 			const root = lifecyclePaths(stateDir, "session-2681", "generation-2681").root;
 			const files = await fs.readdir(root);
@@ -104,11 +109,7 @@ describe("managed owner supervisor", () => {
 		const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "gjc-managed-owner-"));
 		const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "gjc-managed-owner-cwd-"));
 		try {
-			const predecessor = await runSupervisor(stateDir, [
-				process.execPath,
-				"-e",
-				"process.kill(process.pid, 'SIGABRT')",
-			]);
+			const predecessor = await runSupervisor(stateDir, fastSigabrtCommand());
 			expect(predecessor.exitCode).toBe(134);
 			const root = lifecyclePaths(stateDir, "session-2681", "generation-2681").root;
 			const bindingFile = (await fs.readdir(root)).find(

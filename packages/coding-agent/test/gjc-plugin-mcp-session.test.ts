@@ -7,6 +7,8 @@ import { Settings } from "@gajae-code/coding-agent/config/settings";
 import { createAgentSession } from "@gajae-code/coding-agent/sdk";
 import { SessionManager } from "@gajae-code/coding-agent/session/session-manager";
 import { installGjcPluginBundle } from "../src/extensibility/gjc-plugins";
+import { buildPluginMcpConfigs } from "../src/extensibility/gjc-plugins/runtime-adapters";
+import { MCPManager } from "../src/runtime-mcp";
 
 const fixturesRoot = path.join(import.meta.dir, "fixtures", "gjc-plugins");
 const mcpBundle = path.join(fixturesRoot, "valid-mcp-bundle");
@@ -22,11 +24,15 @@ describe("always-on plugin-bundle MCP in a live session", () => {
 		tempDirs.push(cwd);
 		await installGjcPluginBundle(mcpBundle, { scope: "project", cwd });
 
+		const sessionManager = SessionManager.inMemory(cwd);
+		sessionManager.appendMCPToolSelection(["mcp__domain_docs_lookup"]);
+		const sessionSettings = Settings.isolated();
+		sessionSettings.set("tools.discoveryMode", "all");
 		const { session, mcpManager } = await createAgentSession({
 			cwd,
 			agentDir: cwd,
-			sessionManager: SessionManager.inMemory(cwd),
-			settings: Settings.isolated(),
+			sessionManager,
+			settings: sessionSettings,
 			model: getBundledModel("openai", "gpt-4o-mini"),
 			disableExtensionDiscovery: true,
 			extensions: [],
@@ -34,7 +40,7 @@ describe("always-on plugin-bundle MCP in a live session", () => {
 			contextFiles: [],
 			promptTemplates: [],
 			slashCommands: [],
-			// MCP discovery stays off; plugin-bundle MCP is always-on regardless.
+			// Generic discovery is fully enabled; plugin-bundle MCP remains mandatory rather than selectable.
 			enableMCP: false,
 			enableLsp: false,
 		});
@@ -43,18 +49,70 @@ describe("always-on plugin-bundle MCP in a live session", () => {
 			// The session must own a manager and have connected the bundled server.
 			expect(mcpManager).toBeDefined();
 			expect(mcpManager?.getConnectedServers()).toContain("domain_docs");
+			expect(mcpManager?.isConnectionSetSealed()).toBe(true);
 
-			// The bundled server advertises a "lookup" tool. It must be both
-			// registered AND active (always-on), not gated behind MCP selection.
-			const lookup = session.getAllToolNames().find(n => n.includes("lookup"));
-			expect(lookup).toBeDefined();
-			expect(session.getActiveToolNames()).toContain(lookup as string);
+			// The bundled server advertises a "lookup" tool. Its canonical name must
+			// be registered AND active (always-on), not gated behind MCP selection.
+			const lookup = "mcp__domain_docs_lookup";
+			expect(session.getAllToolNames()).toContain(lookup);
+			expect(session.getActiveToolNames()).toContain(lookup);
+			expect(session.getSelectedMCPToolNames()).not.toContain(lookup);
+			expect(sessionManager.buildSessionContext()).toMatchObject({
+				hasPersistedMCPToolSelection: true,
+				selectedMCPToolNames: [],
+			});
+			await session.setActiveToolsByName([]);
+			expect(session.getActiveToolNames()).toContain(lookup);
+			expect(session.getSelectedMCPToolNames()).not.toContain(lookup);
+			expect(sessionManager.buildSessionContext().selectedMCPToolNames).toEqual([]);
+
+			// Starting a fresh session recomputes MCP selection; plugin-bundle tools
+			// remain always-on rather than falling back behind discovery selection.
+			expect(await session.newSession()).toBe(true);
+			expect(session.getActiveToolNames()).toContain(lookup);
+			expect(session.getSelectedMCPToolNames()).not.toContain(lookup);
+			await expect(mcpManager?.disconnectServer("domain_docs")).rejects.toThrow("connection set is sealed");
 		} finally {
 			await session.dispose();
 		}
 
 		// Disposing the session disconnects the owned manager (no leaked processes).
 		expect(mcpManager?.getConnectedServers()).toEqual([]);
+	}, 30_000);
+
+	test("filters an explicitly requested mandatory plugin tool from persisted selection authority", async () => {
+		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "gjc-mcp-session-explicit-"));
+		tempDirs.push(cwd);
+		await installGjcPluginBundle(mcpBundle, { scope: "project", cwd });
+		const sessionManager = SessionManager.inMemory(cwd);
+		const sessionSettings = Settings.isolated();
+		sessionSettings.set("tools.discoveryMode", "all");
+		const { session } = await createAgentSession({
+			cwd,
+			agentDir: cwd,
+			sessionManager,
+			settings: sessionSettings,
+			model: getBundledModel("openai", "gpt-4o-mini"),
+			toolNames: ["mcp__domain_docs_lookup"],
+			disableExtensionDiscovery: true,
+			extensions: [],
+			skills: [],
+			contextFiles: [],
+			promptTemplates: [],
+			slashCommands: [],
+			enableMCP: false,
+			enableLsp: false,
+		});
+		try {
+			expect(session.getActiveToolNames()).toContain("mcp__domain_docs_lookup");
+			expect(session.getSelectedMCPToolNames()).not.toContain("mcp__domain_docs_lookup");
+			expect(sessionManager.buildSessionContext()).toMatchObject({
+				hasPersistedMCPToolSelection: false,
+				selectedMCPToolNames: [],
+			});
+		} finally {
+			await session.dispose();
+		}
 	}, 30_000);
 
 	test("does not connect any MCP server when no plugin bundle is installed", async () => {
@@ -130,9 +188,9 @@ describe("always-on plugin-bundle MCP in a live session", () => {
 		});
 
 		try {
-			const lookup = child.session.getAllToolNames().find(n => n.includes("lookup"));
-			expect(lookup).toBeDefined();
-			expect(child.session.getActiveToolNames()).toContain(lookup as string);
+			const lookup = "mcp__domain_docs_lookup";
+			expect(child.session.getAllToolNames()).toContain(lookup);
+			expect(child.session.getActiveToolNames()).toContain(lookup);
 			// Subagent does not own a manager.
 			expect(child.mcpManager).toBeUndefined();
 		} finally {
@@ -144,5 +202,50 @@ describe("always-on plugin-bundle MCP in a live session", () => {
 		// Only disposing the owner tears the manager down.
 		await parent.session.dispose();
 		expect(parentManager?.getConnectedServers()).toEqual([]);
+	}, 30_000);
+
+	test.each([
+		"gjc-plugins",
+		"custom",
+	])("does not inherit caller-owned MCP tools with %s source metadata as mandatory", async provider => {
+		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "gjc-mcp-session-forged-"));
+		tempDirs.push(cwd);
+		await installGjcPluginBundle(mcpBundle, { scope: "project", cwd });
+		const { configs } = await buildPluginMcpConfigs({ cwd });
+		const callerManager = new MCPManager(cwd);
+		const sources = {
+			domain_docs: { provider, providerName: "Caller-owned manager", level: "project" as const },
+		};
+		const connected = await callerManager.connectServers(configs, sources as never);
+		expect(connected.errors.size).toBe(0);
+		expect(callerManager.getTools().map(tool => tool.name)).toContain("mcp__domain_docs_lookup");
+
+		const child = await createAgentSession({
+			cwd,
+			agentDir: cwd,
+			sessionManager: SessionManager.inMemory(cwd),
+			settings: Settings.isolated(),
+			model: getBundledModel("openai", "gpt-4o-mini"),
+			disableExtensionDiscovery: true,
+			extensions: [],
+			skills: [],
+			contextFiles: [],
+			promptTemplates: [],
+			slashCommands: [],
+			enableMCP: false,
+			enableLsp: false,
+			parentTaskPrefix: "0-Forged",
+			mcpManager: callerManager,
+		});
+		try {
+			expect(child.session.getAllToolNames()).not.toContain("mcp__domain_docs_lookup");
+			expect(child.session.getActiveToolNames()).not.toContain("mcp__domain_docs_lookup");
+			expect(child.mcpManager).toBe(callerManager);
+		} finally {
+			await child.session.dispose();
+		}
+		expect(callerManager.getConnectedServers()).toContain("domain_docs");
+		await callerManager.disconnectAll();
+		expect(callerManager.getConnectedServers()).toEqual([]);
 	}, 30_000);
 });

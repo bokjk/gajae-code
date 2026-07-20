@@ -556,6 +556,8 @@ export interface AgentSessionConfig {
 	defaultSelectedMCPServerNames?: string[];
 	/** MCP tool names that should seed brand-new sessions created from this AgentSession. */
 	defaultSelectedMCPToolNames?: string[];
+	/** MCP capabilities that are always active and never part of persisted user selection. */
+	mandatoryMCPToolNames?: string[];
 	/** TTSR manager for time-traveling stream rules */
 	ttsrManager?: TtsrManager;
 	/** Secret obfuscator for deobfuscating streaming edit content */
@@ -1687,6 +1689,7 @@ export class AgentSession {
 	#gjcSubskillToolSignature: string | undefined;
 	#defaultSelectedMCPServerNames = new Set<string>();
 	#defaultSelectedMCPToolNames = new Set<string>();
+	#mandatoryMCPToolNames = new Set<string>();
 	/** Constructor authority applies only while this AgentSession instance remains alive. */
 	#constructorMCPToolSelection: string[] | undefined;
 	#constructorDiscoveredBuiltinToolSelection: string[] | undefined;
@@ -2198,6 +2201,11 @@ export class AgentSession {
 		);
 		this.#defaultSelectedMCPServerNames = new Set(config.defaultSelectedMCPServerNames ?? []);
 		this.#defaultSelectedMCPToolNames = new Set(config.defaultSelectedMCPToolNames ?? []);
+		this.#mandatoryMCPToolNames = new Set(
+			(config.mandatoryMCPToolNames ?? [])
+				.map(name => name.toLowerCase())
+				.filter(name => this.#toolRegistry.has(name)),
+		);
 		this.#constructorMCPToolSelection =
 			config.initialMCPToolSelectionIsExplicit === true
 				? this.#filterSelectableMCPToolNames(config.initialPersistedMCPToolNames ?? [])
@@ -5489,9 +5497,13 @@ export class AgentSession {
 
 	getSelectedMCPToolNames(): string[] {
 		if (!this.#mcpDiscoveryEnabled) {
-			return this.getActiveToolNames().filter(name => isMCPToolName(name) && this.#toolRegistry.has(name));
+			return this.getActiveToolNames().filter(
+				name => isMCPToolName(name) && this.#toolRegistry.has(name) && !this.#mandatoryMCPToolNames.has(name),
+			);
 		}
-		return this.#filterSelectableMCPToolNames(this.#selectedMCPToolNames);
+		return this.#filterSelectableMCPToolNames(this.#selectedMCPToolNames).filter(
+			name => !this.#mandatoryMCPToolNames.has(name),
+		);
 	}
 
 	// ── Generic tool discovery (covers built-in + MCP + extension) ────────────
@@ -5771,7 +5783,7 @@ export class AgentSession {
 			nextSelectedDiscoveredBuiltinToolNames?: string[];
 		},
 	): Promise<void> {
-		toolNames = [...new Set(toolNames.map(name => name.toLowerCase()))];
+		toolNames = [...new Set([...toolNames.map(name => name.toLowerCase()), ...this.#mandatoryMCPToolNames])];
 		const previousSelectedMCPToolNames = options?.previousSelectedMCPToolNames ?? this.getSelectedMCPToolNames();
 		const previousSelectedDiscoveredBuiltinToolNames =
 			options?.previousSelectedDiscoveredBuiltinToolNames ?? this.#getSelectedDiscoveredBuiltinToolNames();
@@ -5787,7 +5799,11 @@ export class AgentSession {
 		const nextSelectedMCPToolNames = this.#mcpDiscoveryEnabled
 			? new Set(
 					validToolNames.filter(
-						name => isMCPToolName(name) && this.#discoverableMCPTools.has(name) && this.#toolRegistry.has(name),
+						name =>
+							isMCPToolName(name) &&
+							!this.#mandatoryMCPToolNames.has(name) &&
+							this.#discoverableMCPTools.has(name) &&
+							this.#toolRegistry.has(name),
 					),
 				)
 			: this.#selectedMCPToolNames;
